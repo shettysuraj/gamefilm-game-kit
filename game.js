@@ -106,6 +106,11 @@ export function createGame(seed) {
 
     render(ctx, W, H) {
       ctx.fillStyle = '#06070d'; ctx.fillRect(0, 0, W, H);
+      // playfield walls — the ball bounces off the left/right; top & bottom are the goals
+      ctx.fillStyle = '#1b2c66';
+      ctx.fillRect(0, 0, 5, H); ctx.fillRect(W - 5, 0, 5, H);
+      ctx.strokeStyle = 'rgba(121,244,255,0.30)'; ctx.lineWidth = 2;
+      ctx.strokeRect(1, 1, W - 2, H - 2);
       // center net
       ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 3; ctx.setLineDash([10, 12]);
       ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke(); ctx.setLineDash([]);
