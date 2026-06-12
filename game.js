@@ -22,12 +22,12 @@ export const GAME_META = {
   ],
 };
 
-export const ENGINE_VERSION = 1;
+export const ENGINE_VERSION = 2;
 
 export const SCHEMA = `GAME: Pong — the original video game, deterministic. Same seed + inputs reproduce the exact rally; the score is server-verified from the replay.
 LAYOUT (portrait): your paddle slides along the BOTTOM (you control its X by dragging); the AI paddle guards the TOP and tracks the ball. The ball rallies vertically between them and bounces off the side walls.
 GOAL: get the ball past the AI to score; if it gets past you, the AI scores. First to 7 wins.
-PHYSICS: every paddle hit speeds the ball up slightly and adds "english" based on where on the paddle it lands (hit it off-center to angle your return). Serves use the seed.
+PHYSICS: every paddle hit speeds the ball up 10% (capped) and adds "english" based on where on the paddle it lands (hit it off-center to angle your return). Serves use the seed.
 STRATEGY: meet the ball with the edge of the paddle to angle returns past the AI; the AI is fast but has a capped speed, so a sharp cross-court angle can beat it; longer rallies mean a faster ball — stay centered and ready.`;
 
 export function createPRNG(seed) {
@@ -49,7 +49,7 @@ export function createPRNG(seed) {
 const W = 390, H = 844;
 const PADDLE_W = 74, PADDLE_H = 12, BALL_R = 8;
 const PLAYER_Y = H - 70, AI_Y = 58;        // paddle top edges
-const AI_SPEED = 3.6, BASE_SPEED = 5.2, MAX_VX = 6.5, SPEEDUP = 1.04, SERVE_PAUSE = 36, WIN = 7;
+const AI_SPEED = 3.6, BASE_SPEED = 5.2, SPEEDUP = 1.10, MAX_SPEED = 14, SERVE_PAUSE = 36, WIN = 7;
 const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
 const HALF = PADDLE_W / 2;
 
@@ -68,8 +68,11 @@ export function createGame(seed) {
     rally = 0; serveTimer = SERVE_PAUSE;
   }
   function bounce(paddleX, up) {
-    ball.vy = (up ? -1 : 1) * Math.abs(ball.vy) * SPEEDUP;
-    ball.vx = clamp(ball.vx + (ball.x - paddleX) / HALF * 2, -MAX_VX, MAX_VX);
+    const vx = ball.vx + (ball.x - paddleX) / HALF * 2.5;     // off-center hit angles the return
+    const vy = (up ? -1 : 1) * Math.abs(ball.vy);
+    const cur = Math.hypot(vx, vy) || 1;
+    const next = Math.min(cur * SPEEDUP, MAX_SPEED);          // 10% faster EVERY paddle hit (capped to avoid tunneling)
+    ball.vx = vx / cur * next; ball.vy = vy / cur * next;
     rally++; rallies++; if (rally > longestRally) longestRally = rally;
   }
   serve(true);
