@@ -39,7 +39,7 @@ loads on GameFilm.
 ## What's here
 
 - **`GAME_SPEC.md`** — the full contract. Hand it to your LLM.
-- **`game.js`** — a working sample (Pac-Man). Edit it, or replace it with your own.
+- **`game.js`** — a working sample (Pong, the default template). Edit it, or replace it with your own.
 - **`gf.mjs`** — the `verify` / `play` CLI.
 - **`runtime/`** — the actual GameFilm runtime, so local play matches production.
 - **`CLAUDE.md`** + **`.claude/commands/new-game.md`** — primes Claude Code for the workflow.

@@ -17,7 +17,7 @@ every time — do not hand back a game you haven't run through `verify`.
 - `createGame(seed, opts)` returns `{ update(input), render(ctx, W, H), isOver(), getResult() }`
   (plus optional `getState()`); every key in `GAME_META.result.fields` must appear in `getResult()`
 
-`game.js` in this folder is a **working sample (Pac-Man)** — read it and pattern-match it.
+`game.js` in this folder is a **working sample (Pong — the default template)** — read it and pattern-match it.
 
 ## The loop — do this every time
 
