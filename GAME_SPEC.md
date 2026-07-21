@@ -326,34 +326,31 @@ as a pass on upload):
 
 ## 10. Versioning & cross-version replay
 
-Replays are kept forever and must stay playable after the game evolves. **You declare the
-version; the platform archives the bytes.** `ENGINE_VERSION` is an integer you export from
-`game.js` (§4) and **bump every time you change behavior** — new mechanics, tuned constants,
-altered level data, a different PRNG draw order. Anything that could make the same
-`(seed, inputs)` produce a different result is a new version. Cosmetic-only render changes are
-the one safe exception.
+Replays are kept forever and must stay playable after the game evolves. **You don't manage
+versions — the platform does.** You write game logic; when you publish, the platform decides
+whether the logic changed and, if so, freezes the previous build and assigns the next version
+number. You never declare, bump, or track a version. The one thing this asks of you — and it's
+already **Law 2** — is **keep `game.js` self-contained with zero imports**, so a build is one
+runnable file the platform can freeze verbatim.
 
-The bump is the signal the platform acts on: **when it sees an `ENGINE_VERSION` it hasn't
-archived yet, it freezes those exact bytes under that number, forever.** Because your `game.js`
-*is* the replay engine (one self-contained file, no separate artifact), the archived copy is a
-complete, runnable engine — so any replay recorded on that version can always be reproduced
-against the engine that produced it. No bump means no archive: ship changed behavior under a
-stale version and the old archived bytes no longer reproduce the replays recorded against them.
-That's the one way to break the guarantee, and it's entirely in your hands.
+How the number is chosen: on publish the platform computes a **version-insensitive logic hash** of
+your source (the same source with any version stamp normalized away). If it matches the current
+live build, nothing changed — the publish is a no-op and no new version is minted. If it differs,
+the platform **archives the current build unchanged and assigns the next version**, then stamps
+that number into the build it serves. Because builds are immutable per-version artifacts, archiving
+the old one is automatic — the new build never touches it.
 
 A recorded replay carries the version it was played on. When that differs from the live build, we
-replay it against the **archived** engine of that version instead of the current one. That is the
-whole reason versioning exists.
+reproduce it against the **archived** build of that version instead of the current one. That is the
+whole reason versioning exists, and why author-managed numbers were a hazard: forgetting to bump
+after changing behavior silently re-scored every replay recorded on the old number. Deriving the
+version from the logic hash removes that failure entirely — a behavior change *cannot* reuse a
+number, and a cosmetic change (a reformatted comment, a re-stamped version line) *cannot* waste one.
 
-The only other thing this asks of you — and it's already **Law 2** — is **keep `game.js`
-self-contained with zero imports**. Archiving a version is then just a copy of the file; a
-relative import would make the archived copy un-runnable in isolation and break every replay
-recorded on that build. As long as you keep your module exports and `createGame` shape stable
-(§4, §7), the past stays reproducible.
-
-> Possible future direction, **not current behavior**: deriving the version automatically from a
-> content hash of the file, so the platform never depends on the author remembering to bump.
-> Today the declared `ENGINE_VERSION` is the sole source of truth.
+> First-party games in `games/` are the exception: they still declare `ENGINE_VERSION` in the file
+> and archive through the deploy pipeline (a trusted, code-reviewed path). Games published through
+> the studio use system-assigned versioning described above and **do not declare a version at all** —
+> if you include one it's ignored and overwritten by the assigned number.
 
 **Leaderboard scope.** A leaderboard is scoped to **(build + seed)** — a player is ranked only
 against others who played the *same immutable build* on the *same seed*. Every ranking is
