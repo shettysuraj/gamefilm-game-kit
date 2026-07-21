@@ -82,7 +82,7 @@ export const GameFilm = {
     return !!(this._replayToken && this._replayHub);
   },
 
-  async submitResults({ seed, frames, score, timeline, sensitivity, onProgress }) {
+  async submitResults({ seed, frames, score, timeline, sensitivity, onProgress, onStatus }) {
     // Bridge/sandbox mode: hand the result to the parent shell via postMessage. The parent
     // (which holds the token) decides what to do — show the dev their score (sandbox) or perform
     // the authenticated submit (published UGC). No token, no hub POST from inside the frame.
@@ -114,13 +114,29 @@ export const GameFilm = {
 
     const url = `${this._hubUrl}/api/games/${this._gameType}/results`;
 
-    this._savePending(payload, url);
+    // Persist the replay locally BEFORE any network — the game is safe even if the player
+    // swipes away mid-upload (retryPending on next game load + the hub's sync recover it).
+    const persisted = this._savePending(payload, url);
 
+    if (persisted) {
+      // Optimistic: don't block the score on the upload. Upload in the background and report
+      // status; if it's interrupted, the persisted copy is recovered later. No lost games.
+      if (onStatus) onStatus('persisted');
+      this._postWithRetry(url, payload, onProgress)
+        .then((result) => { this._clearPending(this._token); if (onStatus) onStatus('sent', result); })
+        .catch((e) => { if (onStatus) onStatus((e.offline || (typeof navigator !== 'undefined' && !navigator.onLine)) ? 'offline' : 'pending', e); });
+      return { ok: true, persisted: true, score };
+    }
+
+    // localStorage unavailable (e.g. private mode) — can't persist, so block on the upload
+    // so the game still isn't lost.
+    if (onStatus) onStatus('blocking');
     try {
       const result = await this._postWithRetry(url, payload, onProgress);
-      this._clearPending(this._token);
+      if (onStatus) onStatus('sent', result);
       return result;
     } catch (e) {
+      if (onStatus) onStatus((e.offline || (typeof navigator !== 'undefined' && !navigator.onLine)) ? 'offline' : 'error', e);
       e.payload = payload;
       throw e;
     }
@@ -233,7 +249,8 @@ export const GameFilm = {
     try {
       const key = `gamefilm_pending_${payload.token}`;
       localStorage.setItem(key, JSON.stringify({ url, payload, savedAt: Date.now() }));
-    } catch { /* localStorage full or unavailable */ }
+      return true;
+    } catch { return false; /* localStorage full or unavailable */ }
   },
 
   _clearPending(token) {

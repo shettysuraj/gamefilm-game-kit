@@ -306,12 +306,21 @@ sim, floating-point reductions whose order differs across runs, and any reliance
 state inside `update`. **Keep `update` and `render` strictly separated** — `update` owns the
 sim, `render` only reads it.
 
-**How adherence is checked, not assumed:** `gamefilm-verify` (the conformance harness,
-`backend/scripts/gamefilm-verify.js`) runs a two-tier static scan (hard-blocks the first list,
-warns on the second), validates the contract, and runs a **determinism check** — replaying
-identical `(seed, inputs)` and diffing the outcome. The parity diff is the gate that actually
-proves determinism; reading the source cannot. A `Math.random` in render passes *because* the
-determinism check passes.
+**How adherence is checked, not assumed:** the conformance harness runs a two-tier static scan
+(hard-blocks the first list, warns on the second), validates the contract, and runs a
+**determinism check** — replaying identical `(seed, inputs)` and diffing the outcome. The parity
+diff is the gate that actually proves determinism; reading the source cannot. A `Math.random` in
+render passes *because* the determinism check passes.
+
+You can run it three ways, and **all three run the same static scan** (one canonical source,
+`verifier/static-checks.js`, generated into the other two — so a local pass means the same thing
+as a pass on upload):
+
+| Where | Command | Executes your game |
+|---|---|---|
+| Game kit (offline, zero-install) | `node gf.mjs verify game.js` | plain `import()` — your own code, your own machine |
+| Studio (`/develop`) | **Verify** button | in a sandboxed cross-origin iframe |
+| Hub (authoritative) | `node verifier/verify.js game.js` | inside the sealed `isolated-vm` isolate |
 
 ---
 

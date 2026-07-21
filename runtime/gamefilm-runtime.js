@@ -361,7 +361,7 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
       }
       return false;
     }
-    if (done && returnUrl && (submitState === 'sent' || submitState === 'done')) {
+    if (done && returnUrl && gameOverFrame >= 60 && (submitState === 'sent' || submitState === 'done' || submitState === 'sending')) {
       const btnW = Math.round(W * 0.55);
       const btnH = 36;
       const btnX = (W - btnW) / 2;
@@ -489,9 +489,8 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
       if (game.isOver()) {
         done = true;
         result = game.getResult();
-        // Cover the score immediately (same tick the game ends) so it can't flash
-        // for a frame before the 'sending' overlay goes up — the score isn't shown
-        // until the replay upload succeeds. Actual submit kicks off next tick.
+        // The run is saved locally the instant it ends (persist-first). Show 'SAVING…' while
+        // the background upload runs — the score stays visible. Submit kicks off next tick.
         if (GameFilm.hasCallback()) submitState = 'sending';
         // Central audio fires game-over from here; a per-game audio module owns
         // its own SFX (incl. game-over/victory) via the game's own event stream.
@@ -526,38 +525,7 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
 
       if (done && result) {
         ctx.textAlign = 'center';
-        if (submitState === 'sending') {
-          ctx.fillStyle = 'rgba(10, 11, 16, 0.95)';
-          ctx.fillRect(0, 0, W, H);
-          const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.006);
-          ctx.fillStyle = `rgba(255, 68, 68, ${0.4 + pulse * 0.6})`;
-          ctx.font = `bold ${Math.round(W * 0.055)}px "Courier New", monospace`;
-          ctx.fillText('DO NOT CLOSE', W / 2, H * 0.40);
-          ctx.fillStyle = `rgba(200, 200, 200, ${0.3 + pulse * 0.7})`;
-          ctx.font = `${Math.round(W * 0.038)}px "Courier New", monospace`;
-          ctx.fillText(uploadPhase === 'finalizing' ? 'Saving replay...' : 'Uploading replay...', W / 2, H * 0.46);
-
-          // Upload progress bar. The score stays hidden behind this overlay until
-          // the replay is stored — finalizing = server verifying + writing to S3.
-          const barW = Math.round(W * 0.6), barH = 10;
-          const barX = Math.round((W - barW) / 2), barY = Math.round(H * 0.51);
-          const frac = uploadPhase === 'finalizing' ? 1 : Math.max(0.02, uploadProgress);
-          ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-          ctx.lineWidth = 1;
-          ctx.strokeRect(barX, barY, barW, barH);
-          ctx.fillStyle = '#00FF88';
-          ctx.fillRect(barX + 1, barY + 1, Math.round((barW - 2) * frac), barH - 2);
-          if (uploadPhase === 'finalizing') {
-            // indeterminate shimmer over the full bar while the server works
-            const sx = barX + 1 + (barW - 2) * (0.5 + 0.5 * Math.sin(performance.now() * 0.004)) * 0.85;
-            ctx.fillStyle = 'rgba(255,255,255,0.5)';
-            ctx.fillRect(Math.round(sx), barY + 1, Math.round((barW - 2) * 0.12), barH - 2);
-          }
-          ctx.fillStyle = 'rgba(160,160,160,0.85)';
-          ctx.font = `${Math.round(W * 0.03)}px "Courier New", monospace`;
-          const label = uploadPhase === 'finalizing' ? 'verifying & storing…' : `${Math.round(uploadProgress * 100)}%`;
-          ctx.fillText(label, W / 2, barY + barH + Math.round(W * 0.055));
-        } else if (submitState === 'saved-offline') {
+        if (submitState === 'saved-offline') {
           ctx.fillStyle = 'rgba(10, 11, 16, 0.95)';
           ctx.fillRect(0, 0, W, H);
           ctx.fillStyle = '#f0c040';
@@ -637,13 +605,19 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
             ctx.fillText('RETURN TO GAMEFILM', W / 2, retBtnY + retBtnH / 2);
             ctx.textBaseline = 'alphabetic';
           }
-        } else if (submitState === 'sent' || submitState === 'done') {
-          if (submitState === 'sent') {
+        } else if (submitState === 'sent' || submitState === 'done' || submitState === 'sending') {
+          // Score stays visible (game.render drew it). Small status; the run is already saved
+          // locally the instant it ended (persist-first), so the upload is background-only.
+          if (submitState === 'sending') {
+            ctx.fillStyle = '#888';
+            ctx.font = '12px "Courier New", monospace';
+            ctx.fillText('SAVING…', W / 2, H * 0.515);
+          } else if (submitState === 'sent') {
             ctx.fillStyle = '#00FF88';
             ctx.font = '12px "Courier New", monospace';
-            ctx.fillText('SCORE SENT', W / 2, H * 0.515);
+            ctx.fillText('SCORE SAVED', W / 2, H * 0.515);
           }
-          if (returnUrl) {
+          if (returnUrl && gameOverFrame >= 60) {
             const btnW = Math.round(W * 0.55);
             const btnH = 36;
             const btnX = (W - btnW) / 2;
@@ -658,6 +632,11 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
             ctx.textBaseline = 'middle';
             ctx.fillText('RETURN TO GAMEFILM', W / 2, btnY + btnH / 2);
             ctx.textBaseline = 'alphabetic';
+          } else if (returnUrl) {
+            // brief fat-finger guard before the button arms
+            ctx.fillStyle = '#666';
+            ctx.font = '10px "Courier New", monospace';
+            ctx.fillText('one moment…', W / 2, H * 0.575);
           }
         }
       }
@@ -865,7 +844,7 @@ async function runReplay(root, gameMod, replayData, canvasState) {
   loop.start();
 }
 
-export async function boot(slug) {
+export async function boot(slug, opts = {}) {
   const root = document.getElementById('gf-root');
   if (!root) throw new Error('Missing #gf-root element');
 
@@ -878,9 +857,17 @@ export async function boot(slug) {
     }
   }).observe(document.body, { childList: true });
 
+  // Dev-console / sandbox path: boot from an INJECTED source string (the unsaved game.js the
+  // parent posted in) by importing a blob URL — no file on a server. Otherwise import the
+  // game from its served path. Requires the sandbox CSP to allow `script-src 'self' blob:`.
   let gameMod;
   try {
-    gameMod = await import(`/play/${slug}/game.js`);
+    if (opts.source) {
+      const blobUrl = URL.createObjectURL(new Blob([opts.source], { type: 'text/javascript' }));
+      try { gameMod = await import(blobUrl); } finally { URL.revokeObjectURL(blobUrl); }
+    } else {
+      gameMod = await import(`/play/${slug}/game.js`);
+    }
   } catch (e) {
     showStatus(root, `Failed to load game: ${e.message}`);
     return;
@@ -894,10 +881,13 @@ export async function boot(slug) {
   const meta = gameMod.GAME_META;
   GameFilm.init({ gameType: slug, engineVersion: gameMod.ENGINE_VERSION });
 
-  try {
-    const ga = await import(`/play/${slug}/audio.js`);
-    if (ga && typeof ga.startBGM === 'function') audio = ga;
-  } catch { /* no per-game audio module — use central */ }
+  // Injected/dev games are a single game.js with no sibling audio.js — skip the probe (no 404).
+  if (!opts.source) {
+    try {
+      const ga = await import(`/play/${slug}/audio.js`);
+      if (ga && typeof ga.startBGM === 'function') audio = ga;
+    } catch { /* no per-game audio module — use central */ }
+  }
   audio.init?.(slug);
   const startAudio = () => {
     audio.startBGM();
