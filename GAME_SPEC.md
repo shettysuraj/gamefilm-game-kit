@@ -31,10 +31,10 @@ responsibility fits in one file plus two small companions.
 |---|---|
 | **Simulation** — `createGame` / `update`, deterministic, fixed 60 fps step | HTML shell, hub-computed seed, navigation, bug widget, bfcache/swipe handling |
 | **Look** — `render(ctx, W, H)`, procedural vector graphics, no asset files | Touch/keyboard input capture + delta-compressed **replay recording** |
-| **Rules as data** — `GAME_META` (identity, input type, result/score fields, card stats) | **Score submission** (progress bar; score withheld until the replay is safely stored) |
+| **Rules as data** — `GAME_META` (identity, input type, result/score fields, card stats) | **Score submission** (persist-first: the score shows instantly, upload runs in the background) |
 | **Coach's manual** — `SCHEMA` (mechanics, entities, tactics, strategy) | **Permanent per-game S3 storage** of every player's replay, forever |
 | **Randomness** — `createPRNG(seed)` | **Headless server verification** (replays your `game.js`) + anticheat |
-| **End + result** — `isOver()`, `getResult()` | **Versioning** — stamps & archives each submission as an immutable build |
+| **End + result** — `isOver()`, `getResult()` | **Version archiving** — freezes the bytes of each `ENGINE_VERSION` you declare |
 | *(Optional)* custom input, per-game audio, richer snapshots/events | **Cross-version replay viewer** (old builds reproduced against their own engine) |
 | **Ship 3 files** — `game.js` + `favicon.svg` + `CHANGELOG.md` | **Leaderboards** (build + seed, weekly) |
 | **Obey the Four Laws** (§1) | **AI film sessions + corpus scouting reports** (driven by your `SCHEMA`) |
@@ -90,8 +90,11 @@ Do **not** build any of this — you inherit it by conforming:
 
 - Touch/keyboard input capture and **delta-compressed recording**
 - The **timeline** (periodic state snapshots + event snapshots for AI analysis)
-- **Score submission** over XHR with an upload progress bar; the score is withheld until the
-  replay lands in S3 (`DO NOT CLOSE / Uploading…` overlay), retries on failure
+- **Score submission — persist-first, never lose a game.** The replay is written to
+  `localStorage` *before any network*, so the score appears the instant the run ends; the upload
+  runs in the background over XHR with retries, and anything interrupted is recovered on the next
+  game load or when the hub regains focus. Only in the rare fallback where `localStorage` is
+  unavailable (private mode) does submission block behind a `DO NOT CLOSE / Uploading…` overlay
 - **Permanent S3 storage, fully platform-managed.** Each published game gets its own folder in
   the `gamefilm-ops` bucket (`games/{slug}/`) holding **every player's replay**
   (`replays/{sessionId}.json.gz`) plus every archived build (`cartridges/vN/`, `engines/vN.js`).
@@ -119,7 +122,24 @@ export function createGame(seed, opts); // game instance factory (see §7)
 export function createInput(canvas, W, H, getScale, meta); // OPTIONAL custom input (see §7.3)
 ```
 
----
+`ENGINE_VERSION` is yours to declare and yours to bump — one integer, incremented on every
+change to game behavior. It is the key the platform archives your bytes under (§10), and it is
+**required**: a `game.js` without it is skipped at startup and hard-fails verification.
+
+### 4.1 Isolate constraints (server verification runs your file with no DOM)
+
+Verification replays your game inside a sealed V8 isolate — no module system, no browser. Two
+consequences are hard requirements, and violating either fails *before* your game runs, with an
+error that won't obviously point here:
+
+- **One export per line, declaration form only.** Use `export const`, `export let`, `export var`,
+  `export function`, `export class`. **`export default` and `export { … }` are not supported** —
+  the isolate strips the `export` keyword with a line-start regex to run your file as a plain
+  script, and those forms have nothing to strip. They are rejected explicitly.
+- **No `window`, `document`, or canvas access at module scope.** The isolate deliberately shims
+  nothing browser-shaped; touching a DOM global while the module loads throws and the game never
+  loads. Do DOM work *inside* `render()` — that only ever runs in the browser — never in a
+  top-level constant, cached context, or load-time setup.
 
 ## 5. `GAME_META`
 
@@ -128,7 +148,6 @@ export const GAME_META = {
   name: 'Shapes',
   description: 'One-line arcade-tile blurb.',
   icon: '/play/<slug>/favicon.svg',
-  seedOffset: 18,                       // UNIQUE per game; collision is a hard startup failure
   input: { type: 'joystick', discreteMove: true }, // 'joystick' | 'paddle' | 'bitmask'
   canvas: { width: 390, height: 844 },  // logical resolution (portrait)
   levels: [{ name: 'Wave 1', parTime: 60 }],        // for progression display
@@ -143,7 +162,9 @@ export const GAME_META = {
 };
 ```
 
-- `seedOffset` must be unique across the whole arcade (increment by 1,000,000 for new games).
+- You declare nothing about seeding. Every game draws from one shared global seed per period
+  (an HMAC of the period number), and boards stay separate because a leaderboard keys on
+  **game type + seed**, not on the seed alone.
 - Every key listed in `result.fields` **must** be present in the object `getResult()` returns.
 - `cardStats` keys must exist in `getResult()`. No game-specific code in the frontend — the
   profile renders whatever `cardStats` declares.
@@ -294,33 +315,36 @@ determinism check passes.
 
 ---
 
-## 10. Versioning & cross-version replay (handled for you)
+## 10. Versioning & cross-version replay
 
-Replays are kept forever and must stay playable after the game evolves. **You do not manage
-versions — the platform does.** You never declare, bump, or track an engine version.
+Replays are kept forever and must stay playable after the game evolves. **You declare the
+version; the platform archives the bytes.** `ENGINE_VERSION` is an integer you export from
+`game.js` (§4) and **bump every time you change behavior** — new mechanics, tuned constants,
+altered level data, a different PRNG draw order. Anything that could make the same
+`(seed, inputs)` produce a different result is a new version. Cosmetic-only render changes are
+the one safe exception.
 
-How it works: **each accepted submission is a brand-new, immutable engine build** under the same
-game slug — never an edit to a mutable game. Because your `game.js` *is* the replay engine (one
-self-contained file, no separate artifact), every submission is a complete, runnable engine. On
-each accepted submission the platform **stamps the next version number, archives those exact
-bytes, and stores them, frozen forever** — so any replay recorded on that build can always be
-reproduced against the engine that produced it. Identical resubmissions are a no-op (we hash the
-file; same bytes → same build, no new version).
+The bump is the signal the platform acts on: **when it sees an `ENGINE_VERSION` it hasn't
+archived yet, it freezes those exact bytes under that number, forever.** Because your `game.js`
+*is* the replay engine (one self-contained file, no separate artifact), the archived copy is a
+complete, runnable engine — so any replay recorded on that version can always be reproduced
+against the engine that produced it. No bump means no archive: ship changed behavior under a
+stale version and the old archived bytes no longer reproduce the replays recorded against them.
+That's the one way to break the guarantee, and it's entirely in your hands.
 
 A recorded replay carries the version it was played on. When that differs from the live build, we
-replay it against the **archived** engine of that version instead of the current one. That's the
-whole reason versioning exists, and it's why auto-assignment is safe: we archive the bytes at the
-instant we assign the number, so a version always maps to the exact engine that reproduces it.
+replay it against the **archived** engine of that version instead of the current one. That is the
+whole reason versioning exists.
 
-The only thing this asks of you — and it's already **Law 2** — is **keep `game.js` self-contained
-with zero imports**. Archiving a version is then just a copy of the file; a relative import would
-make the archived copy un-runnable in isolation and break every replay recorded on that build. As
-long as you keep your module exports and `createGame` shape stable (§4, §7), the past stays
-reproducible automatically.
+The only other thing this asks of you — and it's already **Law 2** — is **keep `game.js`
+self-contained with zero imports**. Archiving a version is then just a copy of the file; a
+relative import would make the archived copy un-runnable in isolation and break every replay
+recorded on that build. As long as you keep your module exports and `createGame` shape stable
+(§4, §7), the past stays reproducible.
 
-> Implementation note (platform-side, not the author's concern): the ingest/publish step assigns
-> and stamps the version and archives at that moment — it does not trust a version declared in the
-> submitted file.
+> Possible future direction, **not current behavior**: deriving the version automatically from a
+> content hash of the file, so the platform never depends on the author remembering to bump.
+> Today the declared `ENGINE_VERSION` is the sole source of truth.
 
 **Leaderboard scope.** A leaderboard is scoped to **(build + seed)** — a player is ranked only
 against others who played the *same immutable build* on the *same seed*. Every ranking is
@@ -368,7 +392,7 @@ is granted at publish, never at upload.
 ```js
 export const GAME_META = {
   name: 'Dodge', description: 'Dodge falling blocks. One tap = one lane hop.',
-  icon: '/play/dodge/favicon.svg', seedOffset: 19000000,
+  icon: '/play/dodge/favicon.svg',
   input: { type: 'joystick', discreteMove: true },
   canvas: { width: 390, height: 844 },
   levels: [{ name: 'Endless', parTime: 0 }],
