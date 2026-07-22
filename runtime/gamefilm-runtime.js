@@ -296,8 +296,47 @@ function createSeekBar(root, totalFrames, onSeek) {
   };
 }
 
+// Visible pause / BGM / SFX icons, drawn on the existing bottom-right tap-zones (pause centered at
+// W-80, BGM at W-46, SFX at W-14, all at y=H-22) so what's tappable never moves. Vector shapes only
+// (emoji render inconsistently on canvas). A red slash marks a muted control.
+function drawControls(ctx, W, H, paused, bgmMuted, sfxMuted) {
+  const y = H - 22;
+  ctx.save();
+  ctx.fillStyle = 'rgba(255,255,255,0.72)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.72)';
+  ctx.lineWidth = 2;
+
+  // Pause (two bars) / play (triangle) at W-80
+  const px = W - 80;
+  if (paused) {
+    ctx.beginPath(); ctx.moveTo(px - 5, y - 7); ctx.lineTo(px - 5, y + 7); ctx.lineTo(px + 7, y); ctx.closePath(); ctx.fill();
+  } else {
+    ctx.fillRect(px - 5, y - 7, 3.5, 14); ctx.fillRect(px + 1.5, y - 7, 3.5, 14);
+  }
+
+  // BGM (eighth note) at W-46
+  const bx = W - 46;
+  ctx.beginPath(); ctx.ellipse(bx - 4, y + 6, 3.5, 2.6, -0.3, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(bx - 0.6, y + 5.5); ctx.lineTo(bx - 0.6, y - 8); ctx.lineTo(bx + 5, y - 6); ctx.stroke();
+
+  // SFX (speaker) at W-14
+  const sx = W - 14;
+  ctx.beginPath();
+  ctx.moveTo(sx - 6, y - 3); ctx.lineTo(sx - 2, y - 3); ctx.lineTo(sx + 2, y - 7);
+  ctx.lineTo(sx + 2, y + 7); ctx.lineTo(sx - 2, y + 3); ctx.lineTo(sx - 6, y + 3); ctx.closePath(); ctx.fill();
+  if (!sfxMuted) { ctx.beginPath(); ctx.arc(sx + 2, y, 6, -0.7, 0.7); ctx.stroke(); }
+
+  // Muted slashes
+  ctx.strokeStyle = 'rgba(255,80,80,0.85)';
+  for (const [x, m] of [[bx, bgmMuted], [sx, sfxMuted]]) {
+    if (m) { ctx.beginPath(); ctx.moveTo(x - 8, y + 8); ctx.lineTo(x + 8, y - 8); ctx.stroke(); }
+  }
+  ctx.restore();
+}
+
 async function runLiveGame(root, gameMod, seed, input, canvasState) {
   const { ctx, W, H } = canvasState;
+  const hud = gameMod.GAME_META?.hud;   // standard HUD opt-in (see render); undefined = off
   const game = gameMod.createGame(seed);
   const initSnap = typeof game.getState === 'function' ? game.getState() : null;
   if (initSnap?.phase && initSnap.phase !== 'PLAY') document.body.classList.add('gf-title');
@@ -510,16 +549,42 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
         ctx.restore();
       }
 
-      const sndR = 12;
-      const sndY = H - 22;
-      for (const [x, muted] of [[W - 46, audio.isBGMMuted()], [W - 14, audio.isSFXMuted()]]) {
-        if (muted) {
-          ctx.strokeStyle = 'rgba(255,80,80,0.4)';
-          ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          ctx.moveTo(x - sndR + 3, sndY + sndR - 3);
-          ctx.lineTo(x + sndR - 3, sndY - sndR + 3);
-          ctx.stroke();
+      // Standard HUD — score + visible pause/BGM/SFX buttons — drawn by the platform when the game
+      // opts in with GAME_META.hud (the studio template does; shipped games with their own HUDs
+      // don't). Author controls: hud:false off; hud:{ score:false } to keep buttons but draw your
+      // own score; hud:{ controls:false } for score only. The buttons sit ON the existing tap-zones
+      // (below), so enabling this changes what's DRAWN, never where you tap.
+      if (hud && !done) {
+        const wantScore = hud === true || hud.score !== false;
+        const wantControls = hud === true || hud.controls !== false;
+        if (wantScore) {
+          const sc = (typeof game.getState === 'function' ? game.getState()?.score : result?.score);
+          if (sc != null) {
+            ctx.save();
+            ctx.textAlign = 'center';
+            ctx.font = `bold ${Math.round(W * 0.06)}px "Courier New", monospace`;
+            ctx.fillStyle = 'rgba(255,255,255,0.92)';
+            ctx.fillText(Math.round(sc).toLocaleString(), W / 2, 34);
+            ctx.restore();
+          }
+        }
+        if (wantControls) drawControls(ctx, W, H, paused, audio.isBGMMuted(), audio.isSFXMuted());
+      }
+
+      // Mute slashes for games WITHOUT the standard controls (they still have the invisible
+      // tap-zones + M/N keys); the standard HUD draws its own slashes via drawControls.
+      if (!hud || hud.controls === false) {
+        const sndR = 12;
+        const sndY = H - 22;
+        for (const [x, muted] of [[W - 46, audio.isBGMMuted()], [W - 14, audio.isSFXMuted()]]) {
+          if (muted) {
+            ctx.strokeStyle = 'rgba(255,80,80,0.4)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(x - sndR + 3, sndY + sndR - 3);
+            ctx.lineTo(x + sndR - 3, sndY - sndR + 3);
+            ctx.stroke();
+          }
         }
       }
 
@@ -889,6 +954,9 @@ export async function boot(slug, opts = {}) {
     } catch { /* no per-game audio module — use central */ }
   }
   audio.init?.(slug);
+  // Music is data — the author picks a track (or 'none') in GAME_META. Default keeps every existing
+  // game on the original 'ambient' track.
+  audio.setTrack?.(meta.music);
   const startAudio = () => {
     audio.startBGM();
     document.removeEventListener('keydown', startAudio);

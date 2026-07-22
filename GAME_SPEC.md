@@ -159,9 +159,23 @@ export const GAME_META = {
     { key: 'level', label: 'Level', compact: 'L' },
     { key: 'maxCombo', label: 'Best Combo' },
   ],
+  hud: true,                            // OPTIONAL — platform draws score + control buttons (see below)
+  music: 'arcade',                      // OPTIONAL — BGM preset (see below)
 };
 ```
 
+- **`hud`** *(optional)* — let the platform draw the standard HUD so you don't build one. `hud: true`
+  draws the score (read from `getState().score`) top-center plus visible **pause / music / sound**
+  buttons. Granular: `{ score: false }` keeps the buttons but you draw your own score (e.g. a
+  two-player scoreline); `{ controls: false }` draws only the score; `false` or omitted draws
+  nothing (you own the whole HUD). The buttons render on the platform's existing tap-zones, so
+  enabling `hud` changes what's *drawn*, never where the player taps. **When you use `hud: true`,
+  don't also draw the score yourself** — it would double.
+- **`music`** *(optional)* — background music is note-data, not an audio file, so it's swappable by
+  name: `'ambient'` (default), `'arcade'`, `'chiptune'`, `'tense'`, or `'none'` for silence. For a
+  custom tune supply an object: `{ melody: [{ note: 440, dur: 0.5 }, …], chords: [[…]], wave }`
+  (`note` in Hz, `0` = rest; `wave` is `'triangle' | 'square' | 'sawtooth' | 'sine'`). Omitted =
+  `'ambient'`, so existing games are unchanged.
 - You declare nothing about seeding. Every game draws from one shared global seed per period
   (an HMAC of the period number), and boards stay separate because a leaderboard keys on
   **game type + seed**, not on the seed alone.

@@ -75,37 +75,80 @@ function sfxGuard() {
   return true;
 }
 
-// --- BGM: Ambient pad + melody (identical to POP/Bricks) ---
+// --- BGM: pad + melody, one synth, swappable note data ---
+//
+// The synth engine below is fixed; the MUSIC is just data (a melody array + a pad-chord
+// progression + an oscillator waveform). So changing a game's music is changing a preset name,
+// nothing more. A game picks one with `GAME_META.music: 'arcade'`, supplies its own
+// `{ melody, chords, wave }`, or `'none'` for silence. Default = 'ambient' (the original track), so
+// every existing game sounds exactly as before.
 
-const MELODY = [
-  { note: 261.63, dur: 2.0 },
-  { note: 0,      dur: 0.5 },
-  { note: 311.13, dur: 1.5 },
-  { note: 392.00, dur: 2.5 },
-  { note: 0,      dur: 0.5 },
-  { note: 349.23, dur: 1.5 },
-  { note: 311.13, dur: 2.0 },
-  { note: 0,      dur: 0.5 },
-  { note: 392.00, dur: 2.0 },
-  { note: 523.25, dur: 3.0 },
-  { note: 0,      dur: 0.5 },
-  { note: 466.16, dur: 1.5 },
-  { note: 392.00, dur: 2.0 },
-  { note: 349.23, dur: 2.0 },
-  { note: 0,      dur: 0.5 },
-  { note: 311.13, dur: 1.5 },
-  { note: 261.63, dur: 3.0 },
-  { note: 0,      dur: 1.0 },
-];
+const TRACKS = {
+  // The original ambient pad + melody (unchanged — POP/Bricks/Shapes/Amphibian keep this).
+  ambient: {
+    wave: 'triangle',
+    melody: [
+      { note: 261.63, dur: 2.0 }, { note: 0, dur: 0.5 }, { note: 311.13, dur: 1.5 },
+      { note: 392.00, dur: 2.5 }, { note: 0, dur: 0.5 }, { note: 349.23, dur: 1.5 },
+      { note: 311.13, dur: 2.0 }, { note: 0, dur: 0.5 }, { note: 392.00, dur: 2.0 },
+      { note: 523.25, dur: 3.0 }, { note: 0, dur: 0.5 }, { note: 466.16, dur: 1.5 },
+      { note: 392.00, dur: 2.0 }, { note: 349.23, dur: 2.0 }, { note: 0, dur: 0.5 },
+      { note: 311.13, dur: 1.5 }, { note: 261.63, dur: 3.0 }, { note: 0, dur: 1.0 },
+    ],
+    chords: [[65.41, 130.81, 155.56], [58.27, 116.54, 174.61], [55.00, 110.00, 164.81], [61.74, 123.47, 185.00]],
+  },
+  // Bright, bouncy, major — an upbeat arcade feel.
+  arcade: {
+    wave: 'square',
+    melody: [
+      { note: 523.25, dur: 0.4 }, { note: 659.25, dur: 0.4 }, { note: 783.99, dur: 0.4 }, { note: 659.25, dur: 0.4 },
+      { note: 587.33, dur: 0.4 }, { note: 698.46, dur: 0.4 }, { note: 587.33, dur: 0.8 }, { note: 0, dur: 0.2 },
+      { note: 523.25, dur: 0.4 }, { note: 659.25, dur: 0.4 }, { note: 783.99, dur: 0.8 }, { note: 0, dur: 0.4 },
+    ],
+    chords: [[130.81, 196.00, 261.63], [146.83, 220.00, 293.66], [164.81, 246.94, 329.63], [146.83, 220.00, 293.66]],
+  },
+  // Classic 8-bit lead — square wave, catchy and fast.
+  chiptune: {
+    wave: 'square',
+    melody: [
+      { note: 392.00, dur: 0.3 }, { note: 392.00, dur: 0.3 }, { note: 523.25, dur: 0.6 }, { note: 392.00, dur: 0.3 },
+      { note: 349.23, dur: 0.3 }, { note: 329.63, dur: 0.6 }, { note: 293.66, dur: 0.6 }, { note: 0, dur: 0.3 },
+      { note: 440.00, dur: 0.3 }, { note: 523.25, dur: 0.3 }, { note: 659.25, dur: 0.6 }, { note: 523.25, dur: 0.6 },
+    ],
+    chords: [[130.81, 164.81, 196.00], [110.00, 146.83, 174.61], [123.47, 155.56, 196.00], [130.81, 164.81, 196.00]],
+  },
+  // Low, sparse, minor — ominous.
+  tense: {
+    wave: 'sawtooth',
+    melody: [
+      { note: 220.00, dur: 2.5 }, { note: 0, dur: 0.5 }, { note: 233.08, dur: 2.0 }, { note: 220.00, dur: 2.0 },
+      { note: 0, dur: 1.0 }, { note: 207.65, dur: 2.5 }, { note: 196.00, dur: 3.0 }, { note: 0, dur: 1.0 },
+    ],
+    chords: [[55.00, 82.41, 110.00], [58.27, 87.31, 116.54], [51.91, 77.78, 103.83], [55.00, 82.41, 110.00]],
+  },
+};
 
-const PAD_CHORDS = [
-  [65.41, 130.81, 155.56],
-  [58.27, 116.54, 174.61],
-  [55.00, 110.00, 164.81],
-  [61.74, 123.47, 185.00],
-];
+let track = TRACKS.ambient;
+let melodyWave = track.wave;
+let _silent = false;
+
+// Select the BGM: a preset name, a custom { melody, chords, wave }, or 'none'. Unknown → ambient.
+// Optional-chained by the runtime, so a per-game audio.js without it is fine.
+export function setTrack(sel) {
+  if (sel === 'none') { _silent = true; return; }
+  _silent = false;
+  if (sel && typeof sel === 'object' && Array.isArray(sel.melody)) {
+    track = { wave: sel.wave || 'triangle', melody: sel.melody, chords: sel.chords || TRACKS.ambient.chords };
+  } else if (typeof sel === 'string' && TRACKS[sel]) {
+    track = TRACKS[sel];
+  } else {
+    track = TRACKS.ambient;
+  }
+  melodyWave = track.wave || 'triangle';
+}
 
 export function startBGM() {
+  if (_silent) return;
   if (!ensureCtx()) return;
   if (bgmPlaying) return;
   bgmPlaying = true;
@@ -130,12 +173,12 @@ export function startBGM() {
   lfoGain.connect(padGain.gain);
   bgmLFO.start();
 
-  playPad(PAD_CHORDS[0]);
+  playPad(track.chords[0]);
 
   chordIndex = 0;
   chordTimer = setInterval(() => {
-    chordIndex = (chordIndex + 1) % PAD_CHORDS.length;
-    morphPad(PAD_CHORDS[chordIndex]);
+    chordIndex = (chordIndex + 1) % track.chords.length;
+    morphPad(track.chords[chordIndex]);
   }, 12000);
 
   melodyFilter = ctx.createBiquadFilter();
@@ -207,8 +250,8 @@ function morphPad(freqs) {
 
 function playMelodyNote() {
   if (!bgmPlaying) return;
-  const step = MELODY[melodyIdx];
-  melodyIdx = (melodyIdx + 1) % MELODY.length;
+  const step = track.melody[melodyIdx];
+  melodyIdx = (melodyIdx + 1) % track.melody.length;
 
   if (step.note > 0) {
     const now = ctx.currentTime;
@@ -217,7 +260,7 @@ function playMelodyNote() {
     const sustainEnd = now + step.dur - release;
 
     const osc = ctx.createOscillator();
-    osc.type = 'triangle';
+    osc.type = melodyWave;
     osc.frequency.value = step.note;
     const osc2 = ctx.createOscillator();
     osc2.type = 'sine';
