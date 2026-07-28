@@ -369,9 +369,11 @@ Two tiers, because they fail for different reasons:
 **Forbidden anywhere** (security / portability — no legitimate use, and *not* something the
 determinism check can catch):
 - `fetch`, `XMLHttpRequest`, `WebSocket` — no network
-- `eval`, `new Function`, dynamic `import()` — no dynamic / external code
+- `eval`, `new Function` (incl. `Function(...)`, `.constructor.constructor`, indirect `(0,eval)`) — no dynamic code
 - `document.cookie` — no ambient credentials
-- Relative imports (`import … from './…'`) — break single-file archiving
+- **Any** `import` / re-export — relative *or* bare (`'child_process'`, `'fs'`, …). A game is one
+  self-contained file with **zero imports**; the scan hard-blocks every import.
+- `globalThis` / `window` / `self` member access, `process.*`, `import.meta` — no host/global escape
 
 **Forbidden in the simulation** (determinism — but the determinism check is the real arbiter):
 - `Math.random()` — use `createPRNG`
