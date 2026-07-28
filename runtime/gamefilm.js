@@ -65,6 +65,19 @@ export const GameFilm = {
     return this._hubUrl ? this._hubUrl + this._returnPath : null;
   },
 
+  // In the studio sandbox there's no hub to navigate back to — the "return" button instead asks the
+  // parent (the studio) to close the preview. True only in bridge mode.
+  isBridge() {
+    return !!this._bridge;
+  },
+
+  // Ask the parent shell to exit the preview (studio play/review). No-op outside bridge mode.
+  exitToParent() {
+    if (!this._bridge || !this._parentOrigin) return false;
+    try { (window.parent || window).postMessage({ type: 'gamefilm:exit', nonce: this._nonce }, this._parentOrigin); return true; }
+    catch { return false; }
+  },
+
   hasCallback() {
     return !!((this._token && this._hubUrl) || this._bridge);
   },

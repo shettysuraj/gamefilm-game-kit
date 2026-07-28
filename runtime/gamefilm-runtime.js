@@ -396,6 +396,11 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
   window.gameResume = () => { setPaused(false); };
 
   const returnUrl = GameFilm.getReturnUrl();
+  // The RETURN button works in two contexts: real hub play navigates back to the hub; studio-sandbox
+  // play has no hub, so it asks the parent (the studio) to close the preview. `canReturn` gates the
+  // button; `doReturn` performs the right action.
+  const canReturn = !!returnUrl || GameFilm.isBridge();
+  const doReturn = () => { if (returnUrl) window.location.href = returnUrl; else GameFilm.exitToParent(); };
 
   function retrySubmit() {
     submitState = 'sending';
@@ -418,25 +423,25 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
         retrySubmit();
         return true;
       }
-      if (returnUrl) {
+      if (canReturn) {
         const retBtnW = Math.round(W * 0.55);
         const retBtnH = 36;
         const retBtnX = (W - retBtnW) / 2;
         const retBtnY = Math.round(H * 0.64);
         if (gx >= retBtnX && gx <= retBtnX + retBtnW && gy >= retBtnY && gy <= retBtnY + retBtnH) {
-          window.location.href = returnUrl;
+          doReturn();
           return true;
         }
       }
       return false;
     }
-    if (done && returnUrl && gameOverFrame >= 60 && (submitState === 'sent' || submitState === 'done' || submitState === 'sending')) {
+    if (done && canReturn && gameOverFrame >= 60 && (submitState === 'sent' || submitState === 'done' || submitState === 'sending')) {
       const btnW = Math.round(W * 0.55);
       const btnH = 36;
       const btnX = (W - btnW) / 2;
       const btnY = Math.round(H * 0.565);
       if (gx >= btnX && gx <= btnX + btnW && gy >= btnY && gy <= btnY + btnH) {
-        window.location.href = returnUrl;
+        doReturn();
         return true;
       }
       return false;
@@ -497,8 +502,8 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
       // events to the per-game audio module. Fires in every phase (title + play).
       if (typeof audio.onSfx === 'function' && typeof game.getSfx === 'function') audio.onSfx(game.getSfx());
 
-      if (snap.wantsReturn && returnUrl) {
-        window.location.href = returnUrl;
+      if (snap.wantsReturn && canReturn) {
+        doReturn();
         return;
       }
 
@@ -631,7 +636,7 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
           ctx.textBaseline = 'middle';
           ctx.fillText('RETRY NOW', W / 2, retryBtnY + retryBtnH / 2);
           ctx.textBaseline = 'alphabetic';
-          if (returnUrl) {
+          if (canReturn) {
             const retBtnW = Math.round(W * 0.55);
             const retBtnH = 36;
             const retBtnX = (W - retBtnW) / 2;
@@ -671,7 +676,7 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
           ctx.textBaseline = 'middle';
           ctx.fillText('RETRY', W / 2, retryBtnY + retryBtnH / 2);
           ctx.textBaseline = 'alphabetic';
-          if (returnUrl) {
+          if (canReturn) {
             const retBtnW = Math.round(W * 0.55);
             const retBtnH = 36;
             const retBtnX = (W - retBtnW) / 2;
@@ -699,7 +704,7 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
             ctx.font = '12px "Courier New", monospace';
             ctx.fillText('SCORE SAVED', W / 2, H * 0.515);
           }
-          if (returnUrl && gameOverFrame >= 60) {
+          if (canReturn && gameOverFrame >= 60) {
             const btnW = Math.round(W * 0.55);
             const btnH = 36;
             const btnX = (W - btnW) / 2;
@@ -714,7 +719,7 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
             ctx.textBaseline = 'middle';
             ctx.fillText('RETURN TO GAMEFILM', W / 2, btnY + btnH / 2);
             ctx.textBaseline = 'alphabetic';
-          } else if (returnUrl) {
+          } else if (canReturn) {
             // brief fat-finger guard before the button arms
             ctx.fillStyle = '#666';
             ctx.font = '10px "Courier New", monospace';
@@ -883,7 +888,7 @@ async function runReplay(root, gameMod, replayData, canvasState) {
         ctx.fillText('REPLAY COMPLETE', W / 2, H * 0.4);
         ctx.font = `${Math.round(W * 0.045)}px "Courier New", monospace`;
         ctx.fillText(`Score: ${Math.round(r.score).toLocaleString()}`, W / 2, H * 0.46);
-        if (returnUrl) {
+        if (canReturn) {
           const btnW = Math.round(W * 0.55);
           const btnH = 36;
           const btnX = (W - btnW) / 2;
