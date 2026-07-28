@@ -364,9 +364,86 @@ function drawControls(ctx, W, H, paused, bgmMuted, sfxMuted) {
   ctx.restore();
 }
 
+// Standard title screen — game name + START + How to Play. Drawn only for games that DECLARE
+// GAME_META.howTo AND expose getState().phase === 'TITLE'. The game keeps its own start-on-tap; the
+// runtime just supplies consistent chrome. Single source of truth for the button geometry so draw
+// and hit-test agree.
+function titleLayout(W, H) {
+  const bw = Math.round(W * 0.56), bx = Math.round((W - bw) / 2);
+  const startY = Math.round(H * 0.52);
+  return { bx, bw, startY, startH: 50, howToY: startY + 64, howToH: 40 };
+}
+
+function drawWrapped(ctx, text, cx, y, maxW, lineH) {
+  const words = String(text).split(' ');
+  const lines = [];
+  let line = '';
+  for (const w of words) {
+    const test = line ? line + ' ' + w : w;
+    if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = w; } else line = test;
+  }
+  if (line) lines.push(line);
+  for (let i = 0; i < lines.length; i++) ctx.fillText(lines[i], cx, y + i * lineH);
+  return lines.length;
+}
+
+function drawTitle(ctx, W, H, name, showHowTo, howTo) {
+  const L = titleLayout(W, H);
+  ctx.save();
+  ctx.textAlign = 'center';
+
+  // Game name
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+  ctx.font = `bold ${Math.round(W * 0.085)}px "Courier New", monospace`;
+  ctx.fillText((name || 'GAME').toUpperCase(), W / 2, Math.round(H * 0.33));
+
+  // START (visual — any tap outside the How-to-Play button starts the game)
+  ctx.fillStyle = '#7CFC9B';
+  ctx.fillRect(L.bx, L.startY, L.bw, L.startH);
+  ctx.fillStyle = '#06120a';
+  ctx.textBaseline = 'middle';
+  ctx.font = `bold ${Math.round(W * 0.05)}px "Courier New", monospace`;
+  ctx.fillText('▶ START', W / 2, L.startY + L.startH / 2);
+
+  // How to Play (outlined button)
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(L.bx, L.howToY, L.bw, L.howToH);
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.font = `${Math.round(W * 0.036)}px "Courier New", monospace`;
+  ctx.fillText('How to Play', W / 2, L.howToY + L.howToH / 2);
+  ctx.textBaseline = 'alphabetic';
+
+  // How-to-Play overlay
+  if (showHowTo) {
+    ctx.fillStyle = 'rgba(6,7,13,0.95)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.font = `bold ${Math.round(W * 0.055)}px "Courier New", monospace`;
+    ctx.fillText('HOW TO PLAY', W / 2, Math.round(H * 0.22));
+    ctx.font = `${Math.round(W * 0.04)}px "Courier New", monospace`;
+    ctx.fillStyle = 'rgba(255,255,255,0.88)';
+    ctx.textAlign = 'left';
+    const lineH = Math.round(W * 0.052), maxW = Math.round(W * 0.82), lx = Math.round(W * 0.09);
+    let ly = Math.round(H * 0.33);
+    for (const item of howTo.slice(0, 10)) {
+      const n = drawWrapped(ctx, '• ' + item, lx, ly, maxW, lineH);
+      ly += n * lineH + 10;
+    }
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = `${Math.round(W * 0.033)}px "Courier New", monospace`;
+    ctx.fillText('tap anywhere to close', W / 2, Math.round(H * 0.92));
+  }
+  ctx.restore();
+}
+
 async function runLiveGame(root, gameMod, seed, input, canvasState) {
   const { ctx, W, H } = canvasState;
   const hud = gameMod.GAME_META?.hud;   // standard HUD opt-in (see render); undefined = off
+  const howToLines = Array.isArray(gameMod.GAME_META?.howTo) && gameMod.GAME_META.howTo.length
+    ? gameMod.GAME_META.howTo : null;   // declare howTo → standard title/How-to-Play chrome
+  let showHowTo = false;                // How-to-Play overlay open (modal, closes on any tap)
   const game = gameMod.createGame(seed);
   const initSnap = typeof game.getState === 'function' ? game.getState() : null;
   if (initSnap?.phase && initSnap.phase !== 'PLAY') document.body.classList.add('gf-title');
@@ -414,6 +491,7 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
   }
 
   function hitButton(gx, gy) {
+    if (showHowTo) { showHowTo = false; return true; }   // modal overlay: any tap closes it
     if (done && (submitState === 'error' || submitState === 'saved-offline')) {
       const retryBtnW = Math.round(W * 0.5);
       const retryBtnH = 36;
@@ -452,6 +530,14 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
       if (gx > L.pause - L.hx && gx < L.pause + L.hx) { setPaused(!paused); return true; }
       if (gx > L.bgm - L.hx && gx < L.bgm + L.hx) { audio.toggleBGM(); return true; }
       if (gx > L.sfx - L.hx && gx < L.sfx + L.hx) { audio.toggleSFX(); return true; }
+    }
+    // Standard title: How-to-Play button opens the overlay. START/tap-elsewhere falls through to the
+    // game so it starts on its own tap detection (that tap is the first recorded PLAY input).
+    if (howToLines && !done && game.getState?.()?.phase === 'TITLE') {
+      const T = titleLayout(W, H);
+      if (gx >= T.bx && gx <= T.bx + T.bw && gy >= T.howToY && gy <= T.howToY + T.howToH) {
+        showHowTo = true; return true;
+      }
     }
     return false;
   }
@@ -608,6 +694,12 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
           ctx.fillText(Math.round(sc).toLocaleString(), W / 2, 34);
           ctx.restore();
         }
+      }
+
+      // Standard title screen — game name + START + How to Play, drawn on top of the game's own TITLE
+      // render. Opt-in: a game gets it by declaring GAME_META.howTo and exposing phase === 'TITLE'.
+      if (howToLines && !done && game.getState?.()?.phase === 'TITLE') {
+        drawTitle(ctx, W, H, gameMod.GAME_META?.name, showHowTo, howToLines);
       }
 
       if (done && result) {

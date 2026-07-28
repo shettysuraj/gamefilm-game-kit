@@ -166,6 +166,11 @@ export const GAME_META = {
   ],
   hud: true,                            // OPTIONAL — platform also draws the score (buttons are always standard)
   music: 'arcade',                      // OPTIONAL — BGM preset (see below)
+  howTo: [                              // OPTIONAL — declare it → standard title + How-to-Play screen
+    'Drag to move your paddle.',
+    'Clear every brick to advance.',
+    'Don\'t let the ball fall.',
+  ],
 };
 ```
 
@@ -182,6 +187,12 @@ export const GAME_META = {
   custom tune supply an object: `{ melody: [{ note: 440, dur: 0.5 }, …], chords: [[…]], wave }`
   (`note` in Hz, `0` = rest; `wave` is `'triangle' | 'square' | 'sawtooth' | 'sine'`). Omitted =
   `'ambient'`, so existing games are unchanged.
+- **`howTo`** *(optional)* — declare it and the platform draws the **standard title screen** over your
+  `TITLE` phase: the game name, a green **START** button, and a **How to Play** button that opens an
+  overlay listing these lines. You still own starting the game — START (and any tap outside How-to-Play)
+  falls through to your own tap detection, so the *first recorded input is the tap that starts play*.
+  Requires `getState()` to report `phase === 'TITLE'` before play begins. Omitted → no standard title
+  (your game draws its own), so existing games are unchanged. Keep each line to a short sentence.
 - You declare nothing about seeding. Every game draws from one shared global seed per period
   (an HMAC of the period number), and boards stay separate because a leaderboard keys on
   **game type + seed**, not on the seed alone.

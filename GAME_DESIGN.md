@@ -156,6 +156,10 @@ You inherit a lot — don't rebuild it, and *do* use it, because a game that ign
 
 - **Standard HUD** (`GAME_META.hud: true`): the platform draws the score + pause/music/sound buttons.
   Don't hand-draw a score if you use this. (See spec §5.)
+- **Standard title / How-to-Play** (`GAME_META.howTo`): give it a few short lines and the platform
+  draws a consistent title screen over your `TITLE` phase — game name, START, and a How-to-Play
+  overlay — so every game teaches itself the same way. You keep owning the start (the tap that
+  starts play is the first recorded input). Needs `getState().phase === 'TITLE'` before play. (§5.)
 - **Music** (`GAME_META.music`): pick a preset (`'arcade'`, `'chiptune'`, `'tense'`, `'ambient'`,
   `'none'`) to match your game's feel, or supply a custom melody. Match the music to the mood — a
   tense dodger and a bright arcade shooter want different tracks.
