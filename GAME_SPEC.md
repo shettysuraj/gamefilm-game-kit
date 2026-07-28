@@ -272,7 +272,8 @@ metadata (§7.4).
 
 `getState()` snapshot conventions the runtime understands:
 - `phase` — `'PLAY'` for active frames; any other value (e.g. `'TITLE'`) marks a non-recorded
-  pre-game frame. Only `PLAY` frames are recorded.
+  pre-game frame. Only `PLAY` frames are recorded — **and the one TITLE→PLAY transition frame is
+  skipped too**, so never advance sim state on it (see §7.4b — the #1 replay-integrity bug).
 - `score` — current score (used if `getState` is absent, falls back to `getResult().score`).
 - `sensitivity` — surfaced into the submit payload when present (§7.4).
 - `wantsReturn: true` — runtime navigates back to the hub.
@@ -292,6 +293,31 @@ registers its pause/mute + game-over hit-tester here — required for touch UI),
 - New recordings skip the TITLE phase: the runtime passes `opts.skipTitle` + `opts.sensitivity`.
 - Surface `sensitivity` in `getState()` so it rides the submit payload → S3 → server `replay()`.
 - Games whose sensitivity only scales *recorded input* (Bricks) need none of this.
+
+### 7.4b The TITLE→PLAY transition frame — never run a sim step on it
+
+If your game shows a title screen (`getState().phase === 'TITLE'` before play), the runtime records
+only `PLAY` frames **and skips the single transition frame** where `phase` flips `TITLE → PLAY`.
+Replay then re-runs `createGame(seed, { skipTitle: true })` — already in `PLAY` — and feeds the
+recorded `PLAY` frames. For live play and replay to line up, the transition frame must do **no sim
+work**: just flip to `PLAY` and `return`, so the first *recorded* play step equals replay's frame 0.
+
+```js
+// RIGHT — the transition frame only flips mode; the NEXT frame is the first (recorded) play step,
+// which lines up with replay's skipTitle frame 0.
+if (phase === 'TITLE') { if (startPressed) phase = 'PLAY'; return; }
+tick();   // play simulation
+
+// WRONG — runs a play step on the transition frame. The runtime never records that frame, so
+// replay (skipTitle) is shifted one frame ahead AND the starting input is lost → replay diverges
+// from what was played, even though the game is otherwise fully deterministic.
+if (phase === 'TITLE') { if (startPressed) phase = 'PLAY'; else return; /* falls through */ }
+tick();
+```
+
+This is the most common replay-integrity bug for games with a title screen. Catch it with the
+studio's **⟲ Replay last run**: play a round, then replay it — any divergence means a sim step is
+leaking onto a non-recorded frame (the title screen or that transition frame).
 
 ---
 
