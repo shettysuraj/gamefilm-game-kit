@@ -163,6 +163,11 @@ You inherit a lot — don't rebuild it, and *do* use it, because a game that ign
 - **Music** (`GAME_META.music`): pick a preset (`'arcade'`, `'chiptune'`, `'tense'`, `'ambient'`,
   `'none'`) to match your game's feel, or supply a custom melody. Match the music to the mood — a
   tense dodger and a bright arcade shooter want different tracks.
+- **Custom sound** (optional `audio.js`): for bespoke SFX/BGM beyond the presets, ship a per-game
+  `audio.js` (the audio tab in the studio) — it's versioned and published with your game. Emit sound
+  events from `getSfx()` and synthesize them in `audio.js`'s `onSfx`. Most games don't need it;
+  `GAME_META.music` + central SFX go a long way (see spec §3). Reach for it when the sound *is* the
+  identity (a signature hit, a distinct death sting).
 - **`cardStats`**: choose 2–4 stats that tell the story of a run (Bricks shows Level + Bricks; POP
   shows kills + wave). These are what a player sees on their profile — pick the ones they'll want to
   beat.

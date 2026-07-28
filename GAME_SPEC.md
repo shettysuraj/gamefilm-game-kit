@@ -82,10 +82,34 @@ That is the whole submission. No `index.html`, no server, no engine, no adapter 
 runtime template serves the client, the **synthetic engine** derives verification from
 `game.js`, and the **generic adapter** derives AI coaching from it.
 
-`audio.js` is **cosmetic** — outside the determinism check. On disk it's the sibling file
-above; in the **studio** it's the optional `audio.js` tab, injected into the sandbox
-alongside `game.js` (guarded, so a broken audio module can't crash the game). Empty →
-the platform's built-in audio.
+`audio.js` is **cosmetic** (outside the determinism check) but **first-class**: the studio
+`audio.js` tab is cloud-versioned, published, and served *with the game*, exactly like
+`game.js` — write it once and it ships. It's injected/guarded so a broken audio module can
+never crash the game. Empty → the platform's built-in audio (which `GAME_META.music` +
+central SFX already cover; you only need `audio.js` for bespoke synthesis). It runs in the
+same sandbox as `game.js` — no network, no `fetch`; WebAudio only.
+
+**`audio.js` module contract** — export the control interface the standard pause/BGM/SFX bar
+drives, plus one SFX hook:
+
+```js
+// Required — the platform's control bar + game-over hook call these:
+export function startBGM() {}          // begin music (called on first user gesture)
+export function stopBGM() {}           // called once at game-over (fire your own end sting here)
+export function toggleBGM() { return bgmMuted; }   // flip + return muted
+export function toggleSFX() { return sfxMuted; }
+export function isBGMMuted() { return bgmMuted; }
+export function isSFXMuted() { return sfxMuted; }
+export function init(slug) {}          // optional — one-time setup
+
+// SFX: pick ONE. Event-driven (the game emits sound events each frame via getSfx()):
+export function onSfx(events) { for (const e of events) play(e.type, e); }
+// …or state-delta-driven (read getState() fields against the previous snapshot):
+export function onSnapshot(snap, prevSnap) { if (snap.level > prevSnap.level) levelUp(); }
+```
+
+The engine stays import-free — `game.js` never imports `audio.js`; the runtime wires them.
+For `onSfx`, `game.js` emits sound events by returning them from `getSfx()` (see §6).
 
 ---
 
