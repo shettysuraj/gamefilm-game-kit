@@ -95,7 +95,10 @@ export const GameFilm = {
     return !!(this._replayToken && this._replayHub);
   },
 
-  async submitResults({ seed, frames, score, timeline, sensitivity, onProgress, onStatus }) {
+  async submitResults({ seed, frames, score, timeline, sensitivity, engineVersion, onProgress, onStatus }) {
+    // `engineVersion` override: the sandbox-host parent submits a result it received over the bridge,
+    // so it supplies the game's authoritative version rather than relying on this instance's _engineVersion.
+    const ev = engineVersion ?? this._engineVersion;
     // Bridge/sandbox mode: hand the result to the parent shell via postMessage. The parent
     // (which holds the token) decides what to do — show the dev their score (sandbox) or perform
     // the authenticated submit (published UGC). No token, no hub POST from inside the frame.
@@ -103,7 +106,7 @@ export const GameFilm = {
       if (onProgress) onProgress(1, 'finalizing');
       const msg = {
         type: 'gamefilm:result', nonce: this._nonce, gameType: this._gameType,
-        engineVersion: this._engineVersion, seed, frames, score, timeline: timeline || null,
+        engineVersion: ev, seed, frames, score, timeline: timeline || null,
       };
       if (sensitivity !== undefined) msg.sensitivity = sensitivity;
       // Always target the explicit parent origin — never broadcast to '*'. If the parent didn't
@@ -121,7 +124,7 @@ export const GameFilm = {
       frames,
       score,
       timeline: timeline || null,
-      engineVersion: this._engineVersion,
+      engineVersion: ev,
     };
     if (sensitivity !== undefined) payload.sensitivity = sensitivity;
 
