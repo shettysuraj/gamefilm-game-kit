@@ -1101,6 +1101,16 @@ export async function boot(slug, opts = {}) {
 
   root.querySelector('#gf-status')?.remove();
 
+  // --- Dev replay (studio): the parent injected recorded { seed, frames } from the last play in
+  // this same sandbox. Replay the SAME injected source (no hub fetch, no archive) so a game dev can
+  // verify their game replays identically to what they just played — the exact runReplay path the
+  // hub uses, so "matches here" ⟺ "matches on gamefilm". ---
+  if (opts.replayData && Array.isArray(opts.replayData.frames)) {
+    document.body.classList.add('gf-replay');
+    await runReplay(root, gameMod, opts.replayData, canvasState);
+    return;
+  }
+
   // --- Replay mode ---
   if (GameFilm.isReplay()) {
     document.body.classList.add('gf-replay');
