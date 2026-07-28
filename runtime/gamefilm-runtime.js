@@ -9,6 +9,19 @@ import * as centralAudio from './gamefilm-audio.js';
 // boot() swaps it in if present. All `audio.X` calls below resolve to this binding.
 let audio = centralAudio;
 
+// Wrap an UNTRUSTED per-game audio module (the studio's injected dev audio) so a throw in any of its
+// methods can't crash the game — a broken soundtrack must never break gameplay. Served/central
+// modules are our own code and are used as-is. Boolean getters degrade to false; others swallow.
+function guardAudio(mod) {
+  const out = {};
+  for (const k of Object.keys(mod)) {
+    if (typeof mod[k] !== 'function') continue;
+    const fn = mod[k];
+    out[k] = (...args) => { try { return fn(...args); } catch { return undefined; } };
+  }
+  return out;
+}
+
 const BITMASK_KEYS = {
   ArrowLeft: 1, KeyA: 1,
   ArrowRight: 2, KeyD: 2,
@@ -296,38 +309,55 @@ function createSeekBar(root, totalFrames, onSeek) {
   };
 }
 
-// Visible pause / BGM / SFX icons, drawn on the existing bottom-right tap-zones (pause centered at
-// W-80, BGM at W-46, SFX at W-14, all at y=H-22) so what's tappable never moves. Vector shapes only
-// (emoji render inconsistently on canvas). A red slash marks a muted control.
+// Standard control bar — pause / BGM / SFX, three buttons evenly spaced and CENTERED along the
+// bottom. Single source of truth for their geometry so what's drawn is exactly what's tappable:
+// drawControls draws here, hitButton tests here.
+function controlLayout(W, H) {
+  const cx = W / 2, gap = 46;
+  return { y: H - 22, hx: 22, hy: 18, pause: cx - gap, bgm: cx, sfx: cx + gap };
+}
+
+// Draw the standard control bar. Vector shapes only (emoji render inconsistently on canvas). A faint
+// backing pill keeps the icons legible over any game background; a red slash marks a muted control.
 function drawControls(ctx, W, H, paused, bgmMuted, sfxMuted) {
-  const y = H - 22;
+  const L = controlLayout(W, H), y = L.y;
   ctx.save();
-  ctx.fillStyle = 'rgba(255,255,255,0.72)';
-  ctx.strokeStyle = 'rgba(255,255,255,0.72)';
+
+  // Backing pill spanning the three buttons — reads as intentional platform chrome on busy scenes.
+  const bx0 = L.pause - 20, bx1 = L.sfx + 20, r = 15;
+  ctx.fillStyle = 'rgba(0,0,0,0.30)';
+  ctx.beginPath();
+  ctx.moveTo(bx0 + r, y - r); ctx.lineTo(bx1 - r, y - r);
+  ctx.arcTo(bx1, y - r, bx1, y, r); ctx.arcTo(bx1, y + r, bx1 - r, y + r, r);
+  ctx.lineTo(bx0 + r, y + r); ctx.arcTo(bx0, y + r, bx0, y, r); ctx.arcTo(bx0, y - r, bx0 + r, y - r, r);
+  ctx.closePath(); ctx.fill();
+
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
   ctx.lineWidth = 2;
 
-  // Pause (two bars) / play (triangle) at W-80
-  const px = W - 80;
+  // Pause (two bars) / play (triangle when paused)
+  const px = L.pause;
   if (paused) {
     ctx.beginPath(); ctx.moveTo(px - 5, y - 7); ctx.lineTo(px - 5, y + 7); ctx.lineTo(px + 7, y); ctx.closePath(); ctx.fill();
   } else {
     ctx.fillRect(px - 5, y - 7, 3.5, 14); ctx.fillRect(px + 1.5, y - 7, 3.5, 14);
   }
 
-  // BGM (eighth note) at W-46
-  const bx = W - 46;
+  // BGM (eighth note)
+  const bx = L.bgm;
   ctx.beginPath(); ctx.ellipse(bx - 4, y + 6, 3.5, 2.6, -0.3, 0, Math.PI * 2); ctx.fill();
   ctx.beginPath(); ctx.moveTo(bx - 0.6, y + 5.5); ctx.lineTo(bx - 0.6, y - 8); ctx.lineTo(bx + 5, y - 6); ctx.stroke();
 
-  // SFX (speaker) at W-14
-  const sx = W - 14;
+  // SFX (speaker)
+  const sx = L.sfx;
   ctx.beginPath();
   ctx.moveTo(sx - 6, y - 3); ctx.lineTo(sx - 2, y - 3); ctx.lineTo(sx + 2, y - 7);
   ctx.lineTo(sx + 2, y + 7); ctx.lineTo(sx - 2, y + 3); ctx.lineTo(sx - 6, y + 3); ctx.closePath(); ctx.fill();
   if (!sfxMuted) { ctx.beginPath(); ctx.arc(sx + 2, y, 6, -0.7, 0.7); ctx.stroke(); }
 
   // Muted slashes
-  ctx.strokeStyle = 'rgba(255,80,80,0.85)';
+  ctx.strokeStyle = 'rgba(255,80,80,0.9)';
   for (const [x, m] of [[bx, bgmMuted], [sx, sfxMuted]]) {
     if (m) { ctx.beginPath(); ctx.moveTo(x - 8, y + 8); ctx.lineTo(x + 8, y - 8); ctx.stroke(); }
   }
@@ -412,11 +442,11 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
       return false;
     }
     if (paused) { setPaused(false); return true; }
-    const barY = H - 22;
-    if (gy > barY - 18 && gy < barY + 18) {
-      if (gx > W - 96 && gx < W - 64) { setPaused(!paused); return true; }
-      if (gx > W - 60 && gx < W - 32) { audio.toggleBGM(); return true; }
-      if (gx > W - 28 && gx < W) { audio.toggleSFX(); return true; }
+    const L = controlLayout(W, H);
+    if (gy > L.y - L.hy && gy < L.y + L.hy) {
+      if (gx > L.pause - L.hx && gx < L.pause + L.hx) { setPaused(!paused); return true; }
+      if (gx > L.bgm - L.hx && gx < L.bgm + L.hx) { audio.toggleBGM(); return true; }
+      if (gx > L.sfx - L.hx && gx < L.sfx + L.hx) { audio.toggleSFX(); return true; }
     }
     return false;
   }
@@ -554,37 +584,24 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
       // don't). Author controls: hud:false off; hud:{ score:false } to keep buttons but draw your
       // own score; hud:{ controls:false } for score only. The buttons sit ON the existing tap-zones
       // (below), so enabling this changes what's DRAWN, never where you tap.
-      if (hud && !done) {
-        const wantScore = hud === true || hud.score !== false;
-        const wantControls = hud === true || hud.controls !== false;
-        if (wantScore) {
-          const sc = (typeof game.getState === 'function' ? game.getState()?.score : result?.score);
-          if (sc != null) {
-            ctx.save();
-            ctx.textAlign = 'center';
-            ctx.font = `bold ${Math.round(W * 0.06)}px "Courier New", monospace`;
-            ctx.fillStyle = 'rgba(255,255,255,0.92)';
-            ctx.fillText(Math.round(sc).toLocaleString(), W / 2, 34);
-            ctx.restore();
-          }
-        }
-        if (wantControls) drawControls(ctx, W, H, paused, audio.isBGMMuted(), audio.isSFXMuted());
+      // Standard control bar — pause / BGM / SFX, drawn for EVERY game (platform chrome, like the
+      // return button). Hidden at game-over so it doesn't clash with the return screen. A game with
+      // its own bespoke controls can opt out with GAME_META.hud = { controls: false }.
+      if (!done && !(hud && hud.controls === false)) {
+        drawControls(ctx, W, H, paused, audio.isBGMMuted(), audio.isSFXMuted());
       }
 
-      // Mute slashes for games WITHOUT the standard controls (they still have the invisible
-      // tap-zones + M/N keys); the standard HUD draws its own slashes via drawControls.
-      if (!hud || hud.controls === false) {
-        const sndR = 12;
-        const sndY = H - 22;
-        for (const [x, muted] of [[W - 46, audio.isBGMMuted()], [W - 14, audio.isSFXMuted()]]) {
-          if (muted) {
-            ctx.strokeStyle = 'rgba(255,80,80,0.4)';
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            ctx.moveTo(x - sndR + 3, sndY + sndR - 3);
-            ctx.lineTo(x + sndR - 3, sndY - sndR + 3);
-            ctx.stroke();
-          }
+      // Standard scoreboard — OPT-IN (games draw their own score by default; hud:true or hud.score
+      // adds the platform's centered score readout).
+      if (hud && !done && (hud === true || hud.score !== false)) {
+        const sc = (typeof game.getState === 'function' ? game.getState()?.score : result?.score);
+        if (sc != null) {
+          ctx.save();
+          ctx.textAlign = 'center';
+          ctx.font = `bold ${Math.round(W * 0.06)}px "Courier New", monospace`;
+          ctx.fillStyle = 'rgba(255,255,255,0.92)';
+          ctx.fillText(Math.round(sc).toLocaleString(), W / 2, 34);
+          ctx.restore();
         }
       }
 
@@ -946,8 +963,17 @@ export async function boot(slug, opts = {}) {
   const meta = gameMod.GAME_META;
   GameFilm.init({ gameType: slug, engineVersion: gameMod.ENGINE_VERSION });
 
-  // Injected/dev games are a single game.js with no sibling audio.js — skip the probe (no 404).
-  if (!opts.source) {
+  // Per-game audio module. Injected/dev games (the studio) get their audio the same way they get
+  // their game — as an injected source string (opts.audioSource), blob-imported and guarded. Served
+  // games probe a sibling /play/{slug}/audio.js. Both optional; anything malformed → central audio.
+  if (opts.audioSource) {
+    try {
+      const blobUrl = URL.createObjectURL(new Blob([opts.audioSource], { type: 'text/javascript' }));
+      let mod;
+      try { mod = await import(blobUrl); } finally { URL.revokeObjectURL(blobUrl); }
+      if (mod && typeof mod.startBGM === 'function') audio = guardAudio(mod);
+    } catch { /* bad audio.js — keep central; a broken soundtrack must never break the game */ }
+  } else if (!opts.source) {
     try {
       const ga = await import(`/play/${slug}/audio.js`);
       if (ga && typeof ga.startBGM === 'function') audio = ga;

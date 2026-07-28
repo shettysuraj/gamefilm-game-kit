@@ -82,6 +82,11 @@ That is the whole submission. No `index.html`, no server, no engine, no adapter 
 runtime template serves the client, the **synthetic engine** derives verification from
 `game.js`, and the **generic adapter** derives AI coaching from it.
 
+`audio.js` is **cosmetic** — outside the determinism check. On disk it's the sibling file
+above; in the **studio** it's the optional `audio.js` tab, injected into the sandbox
+alongside `game.js` (guarded, so a broken audio module can't crash the game). Empty →
+the platform's built-in audio.
+
 ---
 
 ## 3. What the platform provides for free
@@ -159,18 +164,19 @@ export const GAME_META = {
     { key: 'level', label: 'Level', compact: 'L' },
     { key: 'maxCombo', label: 'Best Combo' },
   ],
-  hud: true,                            // OPTIONAL — platform draws score + control buttons (see below)
+  hud: true,                            // OPTIONAL — platform also draws the score (buttons are always standard)
   music: 'arcade',                      // OPTIONAL — BGM preset (see below)
 };
 ```
 
-- **`hud`** *(optional)* — let the platform draw the standard HUD so you don't build one. `hud: true`
-  draws the score (read from `getState().score`) top-center plus visible **pause / music / sound**
-  buttons. Granular: `{ score: false }` keeps the buttons but you draw your own score (e.g. a
-  two-player scoreline); `{ controls: false }` draws only the score; `false` or omitted draws
-  nothing (you own the whole HUD). The buttons render on the platform's existing tap-zones, so
-  enabling `hud` changes what's *drawn*, never where the player taps. **When you use `hud: true`,
-  don't also draw the score yourself** — it would double.
+- **Standard controls are always on.** Every game gets the platform's **pause / music / sound**
+  buttons as a centered bar along the bottom, plus the purple **RETURN TO GAMEFILM** button at
+  game-over — drawn by the runtime, no game code, identical across all games. Don't draw your own;
+  and if your game has a bespoke control scheme it must handle, opt out with `hud: { controls: false }`.
+- **`hud`** *(optional)* — governs the **scoreboard** only (the controls above are already standard).
+  `hud: true` draws the score (read from `getState().score`) top-center. Omitted or `false` → you
+  draw your own score (the default). `{ controls: false }` opts OUT of the standard control bar.
+  **When you use `hud: true`, don't also draw the score yourself** — it would double.
 - **`music`** *(optional)* — background music is note-data, not an audio file, so it's swappable by
   name: `'ambient'` (default), `'arcade'`, `'chiptune'`, `'tense'`, or `'none'` for silence. For a
   custom tune supply an object: `{ melody: [{ note: 440, dur: 0.5 }, …], chords: [[…]], wave }`
