@@ -30,20 +30,43 @@ const BITMASK_KEYS = {
   Space: 16,
 };
 
-function createBitmaskInput() {
+// EVERY input factory implements the same four-part contract — read / type / setUiTapHandler /
+// injectTap. `setUiTapHandler` is what gives the platform's chrome (pause, mute, RETURN, the title
+// buttons) first refusal on a tap before the game sees it. Only the joystick used to implement it,
+// so on a touch device a bitmask or paddle game had NO working chrome at all: `hitButton` was never
+// registered, and the canvas `click` fallback deliberately ignores clicks within 500ms of a touch.
+// `numbers` shipped that way — no pause, no way back to the hub, on a phone.
+function createBitmaskInput(canvas, gameW, gameH, getScale) {
   let bitmask = 0;
+  let onUiTap = null;
   document.addEventListener('keydown', e => {
     if (BITMASK_KEYS[e.code]) { bitmask |= BITMASK_KEYS[e.code]; e.preventDefault(); }
   });
   document.addEventListener('keyup', e => {
     if (BITMASK_KEYS[e.code]) bitmask &= ~BITMASK_KEYS[e.code];
   });
-  return { read() { return bitmask; }, type: 'bitmask' };
+  if (canvas) {
+    canvas.addEventListener('touchstart', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const s = gameW / rect.width;
+      for (const t of e.changedTouches) {
+        const gx = (t.clientX - rect.left) * s, gy = (t.clientY - rect.top) * s;
+        if (onUiTap && onUiTap(gx, gy)) { e.preventDefault(); return; }
+      }
+    }, { passive: false });
+  }
+  return {
+    read() { return bitmask; },
+    setUiTapHandler(fn) { onUiTap = fn; },
+    injectTap() { /* bitmask games take no positional input */ },
+    type: 'bitmask',
+  };
 }
 
 function createPaddleInput(canvas, gameW, scale) {
   let paddleX = gameW / 2;
   let shaking = false;
+  let onUiTap = null;
 
   function onMove(clientX) {
     const rect = canvas.getBoundingClientRect();
@@ -52,12 +75,24 @@ function createPaddleInput(canvas, gameW, scale) {
 
   canvas.addEventListener('mousemove', e => onMove(e.clientX));
   canvas.addEventListener('touchmove', e => { e.preventDefault(); onMove(e.touches[0].clientX); }, { passive: false });
-  canvas.addEventListener('touchstart', e => { e.preventDefault(); onMove(e.touches[0].clientX); }, { passive: false });
+  // A tap on the platform's chrome must NOT also fling the paddle across the screen, so the UI
+  // hit-test runs first and swallows the touch when it lands on a button.
+  canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const s = gameW / rect.width;
+    const t = e.touches[0];
+    const gx = (t.clientX - rect.left) * s, gy = (t.clientY - rect.top) * s;
+    if (onUiTap && onUiTap(gx, gy)) return;
+    onMove(t.clientX);
+  }, { passive: false });
   document.addEventListener('keydown', e => { if (e.code === 'KeyK' || e.code === 'ShiftLeft') shaking = true; });
   document.addEventListener('keyup', e => { if (e.code === 'KeyK' || e.code === 'ShiftLeft') shaking = false; });
 
   return {
     read() { return shaking ? { x: Math.round(paddleX), k: 1 } : Math.round(paddleX); },
+    setUiTapHandler(fn) { onUiTap = fn; },
+    injectTap(gx) { paddleX = Math.max(0, Math.min(gameW, gx)); },
     type: 'paddle',
   };
 }
@@ -313,18 +348,21 @@ function createSeekBar(root, totalFrames, onSeek) {
 // bottom. Single source of truth for their geometry so what's drawn is exactly what's tappable:
 // drawControls draws here, hitButton tests here.
 function controlLayout(W, H) {
+  // Four buttons: help / pause / music / sound. Help is its own button, not just a side effect of
+  // pausing — instructions must be reachable deliberately at any moment, without the player having
+  // to guess that "pause" also means "explain".
   const cx = W / 2, gap = 46;
-  return { y: H - 22, hx: 22, hy: 18, pause: cx - gap, bgm: cx, sfx: cx + gap };
+  return { y: H - 22, hx: 22, hy: 18, help: cx - gap * 1.5, pause: cx - gap * 0.5, bgm: cx + gap * 0.5, sfx: cx + gap * 1.5 };
 }
 
 // Draw the standard control bar. Vector shapes only (emoji render inconsistently on canvas). A faint
 // backing pill keeps the icons legible over any game background; a red slash marks a muted control.
-function drawControls(ctx, W, H, paused, bgmMuted, sfxMuted) {
+function drawControls(ctx, W, H, paused, bgmMuted, sfxMuted, showingHelp) {
   const L = controlLayout(W, H), y = L.y;
   ctx.save();
 
   // Backing pill spanning the three buttons — reads as intentional platform chrome on busy scenes.
-  const bx0 = L.pause - 20, bx1 = L.sfx + 20, r = 15;
+  const bx0 = L.help - 20, bx1 = L.sfx + 20, r = 15;
   ctx.fillStyle = 'rgba(0,0,0,0.30)';
   ctx.beginPath();
   ctx.moveTo(bx0 + r, y - r); ctx.lineTo(bx1 - r, y - r);
@@ -335,6 +373,17 @@ function drawControls(ctx, W, H, paused, bgmMuted, sfxMuted) {
   ctx.fillStyle = 'rgba(255,255,255,0.85)';
   ctx.strokeStyle = 'rgba(255,255,255,0.85)';
   ctx.lineWidth = 2;
+
+  // Help (?) — highlighted while the how-to is open so it reads as a toggle.
+  const hx = L.help;
+  ctx.save();
+  if (showingHelp) { ctx.fillStyle = '#7CFC9B'; ctx.strokeStyle = '#7CFC9B'; }
+  ctx.beginPath(); ctx.arc(hx, y, 9, 0, Math.PI * 2); ctx.stroke();
+  ctx.font = 'bold 12px "Courier New", monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('?', hx, y + 0.5);
+  ctx.restore();
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
 
   // Pause (two bars) / play (triangle when paused)
   const px = L.pause;
@@ -370,13 +419,13 @@ function drawControls(ctx, W, H, paused, bgmMuted, sfxMuted) {
 // and hit-test agree.
 function titleLayout(W, H) {
   const bw = Math.round(W * 0.56), bx = Math.round((W - bw) / 2);
-  // Three buttons, one colour each, ALWAYS this order top-to-bottom — How to Play (grey),
-  // PLAY (green), RETURN TO GAMEFILM (purple #6a6af0, the same purple as the game-over button so
-  // "leave" looks identical wherever a player meets it). Fixed order and fixed colours are the point:
-  // a player should not have to re-learn the furniture for every game.
-  const howToY = Math.round(H * 0.50);
-  const playY = howToY + 52;
-  return { bx, bw, howToY, howToH: 40, playY, playH: 50, returnY: playY + 62, returnH: 40 };
+  // Two buttons: PLAY (green) then RETURN TO GAMEFILM (purple #6a6af0 — the same purple as the
+  // game-over button, so "leave" looks identical wherever a player meets it). How to Play is NOT
+  // here: instructions belong where a player actually wants them, which is mid-game, so they live
+  // behind pause instead (see drawHowTo). Fixed order and fixed colours are the point — a player
+  // should not have to re-learn the furniture for every game.
+  const playY = Math.round(H * 0.52);
+  return { bx, bw, playY, playH: 50, returnY: playY + 62, returnH: 40 };
 }
 
 function drawWrapped(ctx, text, cx, y, maxW, lineH) {
@@ -392,7 +441,7 @@ function drawWrapped(ctx, text, cx, y, maxW, lineH) {
   return lines.length;
 }
 
-function drawTitle(ctx, W, H, name, showHowTo, howTo, canReturn) {
+function drawTitle(ctx, W, H, name, canReturn) {
   const L = titleLayout(W, H);
   ctx.save();
   ctx.textAlign = 'center';
@@ -410,14 +459,6 @@ function drawTitle(ctx, W, H, name, showHowTo, howTo, canReturn) {
   ctx.font = `bold ${Math.round(W * 0.05)}px "Courier New", monospace`;
   ctx.fillText('▶ PLAY', W / 2, L.playY + L.playH / 2);
 
-  // How to Play (outlined button)
-  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(L.bx, L.howToY, L.bw, L.howToH);
-  ctx.fillStyle = 'rgba(255,255,255,0.85)';
-  ctx.font = `${Math.round(W * 0.036)}px "Courier New", monospace`;
-  ctx.fillText('How to Play', W / 2, L.howToY + L.howToH / 2);
-
   // RETURN TO GAMEFILM (purple, outlined) — only when there is somewhere to return TO: real hub play
   // has a returnUrl, the studio/review sandbox exits to its parent. Standalone has neither.
   if (canReturn) {
@@ -432,26 +473,28 @@ function drawTitle(ctx, W, H, name, showHowTo, howTo, canReturn) {
   }
   ctx.textBaseline = 'alphabetic';
 
-  // How-to-Play overlay
-  if (showHowTo) {
-    ctx.fillStyle = 'rgba(6,7,13,0.95)';
-    ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = 'rgba(255,255,255,0.95)';
-    ctx.font = `bold ${Math.round(W * 0.055)}px "Courier New", monospace`;
-    ctx.fillText('HOW TO PLAY', W / 2, Math.round(H * 0.22));
-    ctx.font = `${Math.round(W * 0.04)}px "Courier New", monospace`;
-    ctx.fillStyle = 'rgba(255,255,255,0.88)';
-    ctx.textAlign = 'left';
-    const lineH = Math.round(W * 0.052), maxW = Math.round(W * 0.82), lx = Math.round(W * 0.09);
-    let ly = Math.round(H * 0.33);
-    for (const item of howTo.slice(0, 10)) {
-      const n = drawWrapped(ctx, '• ' + item, lx, ly, maxW, lineH);
-      ly += n * lineH + 10;
-    }
-    ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.font = `${Math.round(W * 0.033)}px "Courier New", monospace`;
-    ctx.fillText('tap anywhere to close', W / 2, Math.round(H * 0.92));
+  ctx.restore();
+}
+
+// How-to-Play overlay — drawn OVER the running game whenever it is paused. Instructions are most
+// useful mid-game ("what does this button do again?"), not on a title screen a player taps past in
+// half a second, so pause is the single place they live. Any tap resumes and dismisses.
+function drawHowTo(ctx, W, H, howTo) {
+  ctx.save();
+  ctx.fillStyle = 'rgba(6,7,13,0.95)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+  ctx.font = `bold ${Math.round(W * 0.055)}px "Courier New", monospace`;
+  ctx.fillText('HOW TO PLAY', W / 2, Math.round(H * 0.18));
+  ctx.font = `${Math.round(W * 0.04)}px "Courier New", monospace`;
+  ctx.fillStyle = 'rgba(255,255,255,0.88)';
+  ctx.textAlign = 'left';
+  const lineH = Math.round(W * 0.052), maxW = Math.round(W * 0.82), lx = Math.round(W * 0.09);
+  let ly = Math.round(H * 0.28);
+  for (const item of (howTo || []).slice(0, 10)) {
+    const n = drawWrapped(ctx, '• ' + item, lx, ly, maxW, lineH);
+    ly += n * lineH + 10;
   }
   ctx.restore();
 }
@@ -459,9 +502,13 @@ function drawTitle(ctx, W, H, name, showHowTo, howTo, canReturn) {
 async function runLiveGame(root, gameMod, seed, input, canvasState) {
   const { ctx, W, H } = canvasState;
   const hud = gameMod.GAME_META?.hud;   // standard HUD opt-in (see render); undefined = off
+  // The platform ALWAYS has something to put behind How to Play: the author's howTo lines if they
+  // wrote any, otherwise GAME_META.description (already required). The chrome is injected by the
+  // harness, never opted into — an author should not have to know a magic field name to get the
+  // standard buttons, and forgetting it must not cost a player their way out of the game.
   const howToLines = Array.isArray(gameMod.GAME_META?.howTo) && gameMod.GAME_META.howTo.length
-    ? gameMod.GAME_META.howTo : null;   // declare howTo → standard title/How-to-Play chrome
-  let showHowTo = false;                // How-to-Play overlay open (modal, closes on any tap)
+    ? gameMod.GAME_META.howTo
+    : (gameMod.GAME_META?.description ? [gameMod.GAME_META.description] : null);
   const game = gameMod.createGame(seed);
   const initSnap = typeof game.getState === 'function' ? game.getState() : null;
   if (initSnap?.phase && initSnap.phase !== 'PLAY') document.body.classList.add('gf-title');
@@ -495,6 +542,19 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
   // play has no hub, so it asks the parent (the studio) to close the preview. `canReturn` gates the
   // button; `doReturn` performs the right action.
   const canReturn = !!returnUrl || GameFilm.isBridge();
+
+  // Soft gate on the game-over RETURN button. Hold it back while the upload is genuinely in flight
+  // so a player doesn't wander off mid-save — but NEVER strand them: any settled state (saved,
+  // failed, offline, or no callback at all) arms it immediately, and a hard 6s deadline arms it
+  // regardless. The hard gate this replaces keyed on submitState alone, so a submit that never
+  // advanced left NO return button at all and the player was stuck on the game-over screen.
+  // Both the hit-test and the draw call this, so they can never disagree about what is on screen.
+  const RETURN_ARM_FRAMES = 60;      // fat-finger guard — ~1s after the run ends
+  const RETURN_STALL_FRAMES = 360;   // ~6s: upload has had its chance, let them go
+  const uploadSettled = () => submitState === 'sent' || submitState === 'done'
+    || submitState === 'error' || submitState === 'saved-offline';
+  const returnArmed = () => gameOverFrame >= RETURN_ARM_FRAMES
+    && (uploadSettled() || gameOverFrame >= RETURN_STALL_FRAMES);
   const doReturn = () => { if (returnUrl) window.location.href = returnUrl; else GameFilm.exitToParent(); };
 
   function retrySubmit() {
@@ -509,7 +569,6 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
   }
 
   function hitButton(gx, gy) {
-    if (showHowTo) { showHowTo = false; return true; }   // modal overlay: any tap closes it
     if (done && (submitState === 'error' || submitState === 'saved-offline')) {
       const retryBtnW = Math.round(W * 0.5);
       const retryBtnH = 36;
@@ -531,7 +590,10 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
       }
       return false;
     }
-    if (done && canReturn && gameOverFrame >= 60 && (submitState === 'sent' || submitState === 'done' || submitState === 'sending')) {
+    // Leaving must never depend on the upload. This was gated on submitState, so a run whose submit
+    // never advanced showed NO return button at all — the player was stuck on the game-over screen
+    // with no way back to the hub. The score's fate is reported separately, above.
+    if (done && canReturn && returnArmed()) {
       const btnW = Math.round(W * 0.55);
       const btnH = 36;
       const btnX = (W - btnW) / 2;
@@ -545,17 +607,15 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
     if (paused) { setPaused(false); return true; }
     const L = controlLayout(W, H);
     if (gy > L.y - L.hy && gy < L.y + L.hy) {
+      if (gx > L.help - L.hx && gx < L.help + L.hx) { setPaused(!paused); return true; }
       if (gx > L.pause - L.hx && gx < L.pause + L.hx) { setPaused(!paused); return true; }
       if (gx > L.bgm - L.hx && gx < L.bgm + L.hx) { audio.toggleBGM(); return true; }
       if (gx > L.sfx - L.hx && gx < L.sfx + L.hx) { audio.toggleSFX(); return true; }
     }
-    // Standard title: How-to-Play and RETURN are handled here; PLAY/tap-elsewhere falls through to the
-    // game so it starts on its own tap detection (that tap is the first recorded PLAY input).
-    if (howToLines && !done && game.getState?.()?.phase === 'TITLE') {
+    // Standard title: RETURN is handled here; PLAY/tap-elsewhere falls through to the game so it
+    // starts on its own tap detection (that tap is the first recorded PLAY input).
+    if (!done && game.getState?.()?.phase === 'TITLE') {
       const T = titleLayout(W, H);
-      if (gx >= T.bx && gx <= T.bx + T.bw && gy >= T.howToY && gy <= T.howToY + T.howToH) {
-        showHowTo = true; return true;
-      }
       if (canReturn && gx >= T.bx && gx <= T.bx + T.bw && gy >= T.returnY && gy <= T.returnY + T.returnH) {
         doReturn(); return true;
       }
@@ -700,7 +760,25 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
       // return button). Hidden at game-over so it doesn't clash with the return screen. A game with
       // its own bespoke controls can opt out with GAME_META.hud = { controls: false }.
       if (!done && !(hud && hud.controls === false)) {
-        drawControls(ctx, W, H, paused, audio.isBGMMuted(), audio.isSFXMuted());
+        drawControls(ctx, W, H, paused, audio.isBGMMuted(), audio.isSFXMuted(), paused);
+      }
+
+      // Standard millisecond clock — the platform runs one for EVERY game (see createTimeline: `t`
+      // is stamped on every replay snapshot whether or not the game scores on time). DISPLAY is
+      // opt-in, because all five launch games already draw their own timer and an always-on readout
+      // would double it — same trap as the RETURN button. `hud.timer !== false` means hud:true gets
+      // it; a game keeping its own passes `hud: { timer: false }` or omits hud entirely.
+      if (hud && !done && (hud === true || hud.timer !== false)) {
+        const t = timeline.elapsedMs();
+        const mm = Math.floor(t / 60000);
+        const ss = String(Math.floor((t % 60000) / 1000)).padStart(2, '0');
+        const mmm = String(t % 1000).padStart(3, '0');
+        ctx.save();
+        ctx.textAlign = 'right';
+        ctx.font = `${Math.round(W * 0.036)}px "Courier New", monospace`;
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.fillText(`${mm}:${ss}.${mmm}`, W - 12, 34);
+        ctx.restore();
       }
 
       // Standard scoreboard — OPT-IN (games draw their own score by default; hud:true or hud.score
@@ -717,10 +795,13 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
         }
       }
 
-      // Standard title screen — game name + START + How to Play, drawn on top of the game's own TITLE
-      // render. Opt-in: a game gets it by declaring GAME_META.howTo and exposing phase === 'TITLE'.
-      if (howToLines && !done && game.getState?.()?.phase === 'TITLE') {
-        drawTitle(ctx, W, H, gameMod.GAME_META?.name, showHowTo, howToLines, canReturn);
+      // Standard title chrome — drawn for EVERY game that reports phase === 'TITLE'. This used to
+      // require GAME_META.howTo, which made the platform's only exit route opt-in: `numbers` shipped
+      // without howTo and therefore had no RETURN button anywhere, stranding the player. Standards
+      // are not opt-in. The How-to-Play button still needs howTo (there is nothing to show without
+      // it); PLAY and RETURN are unconditional.
+      if (!done && game.getState?.()?.phase === 'TITLE') {
+        drawTitle(ctx, W, H, gameMod.GAME_META?.name, canReturn);
       }
 
       if (done && result) {
@@ -817,7 +898,7 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
             ctx.font = '12px "Courier New", monospace';
             ctx.fillText('SCORE SAVED', W / 2, H * 0.515);
           }
-          if (canReturn && gameOverFrame >= 60) {
+          if (canReturn && returnArmed()) {
             const btnW = Math.round(W * 0.55);
             const btnH = 36;
             const btnX = (W - btnW) / 2;
@@ -833,17 +914,45 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
             ctx.fillText('RETURN TO GAMEFILM', W / 2, btnY + btnH / 2);
             ctx.textBaseline = 'alphabetic';
           } else if (canReturn) {
-            // brief fat-finger guard before the button arms
+            // Not armed yet: either the 1s fat-finger guard, or the upload is still in flight.
             ctx.fillStyle = '#666';
             ctx.font = '10px "Courier New", monospace';
-            ctx.fillText('one moment…', W / 2, H * 0.575);
+            ctx.fillText(submitState === 'sending' ? 'saving your run…' : 'one moment…', W / 2, H * 0.575);
           }
+        } else if (canReturn && returnArmed()) {
+          // submitState is null — the run ended but nothing was ever submitted (no callback, or the
+          // submit never fired). The old chain drew NOTHING here, so the player was stranded on the
+          // game-over screen with no way back. returnArmed() covers it via the stall deadline.
+          const btnW = Math.round(W * 0.55);
+          const btnH = 36;
+          const btnX = (W - btnW) / 2;
+          const btnY = Math.round(H * 0.565);
+          ctx.strokeStyle = '#6a6af0';
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(btnX, btnY, btnW, btnH);
+          ctx.fillStyle = 'rgba(106,106,240,0.08)';
+          ctx.fillRect(btnX, btnY, btnW, btnH);
+          ctx.fillStyle = '#6a6af0';
+          ctx.font = 'bold 14px "Courier New", monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('RETURN TO GAMEFILM', W / 2, btnY + btnH / 2);
+          ctx.textBaseline = 'alphabetic';
         }
       }
 
       if (paused) {
-        ctx.fillStyle = 'rgba(0,0,0,0.7)';
-        ctx.fillRect(0, 0, W, H);
+        // Pause IS the how-to screen: pausing shows the game's instructions over it, resuming hides
+        // them. The platform decides WHEN (pause) and supplies the buttons; the GAME owns the page
+        // itself — it knows its own mechanics, art and vocabulary, and a generic bullet list can't
+        // explain a game as well as the game can. `renderHowTo(ctx, W, H)` is the hook; the harness
+        // falls back to rendering GAME_META.howTo lines, then to a plain dim, so pause always works.
+        if (typeof game.renderHowTo === 'function') {
+          ctx.fillStyle = 'rgba(6,7,13,0.95)';
+          ctx.fillRect(0, 0, W, H);
+          try { game.renderHowTo(ctx, W, H); } catch { /* a broken how-to must never break pause */ }
+        } else if (howToLines) drawHowTo(ctx, W, H, howToLines);
+        else { ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0, 0, W, H); }
 
         const btnW = Math.round(W * 0.4);
         const btnH = 36;
@@ -861,6 +970,9 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText('RESUME', W / 2, H / 2);
+        ctx.font = `${Math.round(W * 0.033)}px "Courier New", monospace`;
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.fillText('tap anywhere to resume', W / 2, Math.round(H * 0.60));
         ctx.textBaseline = 'alphabetic';
       }
     },
@@ -1036,6 +1148,9 @@ async function runReplay(root, gameMod, replayData, canvasState) {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText('RESUME', W / 2, H / 2);
+        ctx.font = `${Math.round(W * 0.033)}px "Courier New", monospace`;
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.fillText('tap anywhere to resume', W / 2, Math.round(H * 0.60));
         ctx.textBaseline = 'alphabetic';
       }
     },
@@ -1172,7 +1287,7 @@ export async function boot(slug, opts = {}) {
     switch (meta.input?.type) {
       case 'paddle': input = createPaddleInput(canvas, W, getScale()); break;
       case 'joystick': input = createJoystickInput(canvas, W, H, getScale, meta); break;
-      default: input = createBitmaskInput(); break;
+      default: input = createBitmaskInput(canvas, W, H, getScale); break;
     }
   }
   await runLiveGame(root, gameMod, seed, input, canvasState);

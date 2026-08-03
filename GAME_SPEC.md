@@ -205,7 +205,17 @@ export const GAME_META = {
   **Never draw your own version of any of these.** The game-over RETURN button in particular is
   automatic: a game that paints its own ends up with two, in slightly different places. If your game
   has a bespoke control scheme it must handle, opt out with `hud: { controls: false }`.
-- **`hud`** *(optional)* — governs the **scoreboard** only (the controls above are already standard).
+- **Every game has a millisecond clock, running whether you score on it or not.** The platform
+  derives it from the frame count (`frames × 1000/60`), never from a wall clock — `Date.now()` /
+  `performance.now()` would break Law 1 and make every replay diverge, which is why the scan flags
+  them. It is stamped as `t` (ms) on every replay snapshot alongside `f` (frame), so your game's
+  history carries a real duration even if your game never mentions time. **Don't hand-roll a
+  timer**: read `hud` below to display the platform's, and take the elapsed value from the replay
+  data rather than counting your own.
+- **`hud`** *(optional)* — governs the **scoreboard** and the **timer readout** (the controls above
+  are already standard). `hud: true` draws both; `{ timer: false }` or `{ score: false }` turns one
+  off; omit `hud` entirely and you draw your own. **Don't draw a readout the platform is already
+  drawing** — you get two.
   `hud: true` draws the score (read from `getState().score`) top-center. Omitted or `false` → you
   draw your own score (the default). `{ controls: false }` opts OUT of the standard control bar.
   **When you use `hud: true`, don't also draw the score yourself** — it would double.
@@ -214,25 +224,51 @@ export const GAME_META = {
   custom tune supply an object: `{ melody: [{ note: 440, dur: 0.5 }, …], chords: [[…]], wave }`
   (`note` in Hz, `0` = rest; `wave` is `'triangle' | 'square' | 'sawtooth' | 'sine'`). Omitted =
   `'ambient'`, so existing games are unchanged.
-- **`howTo`** *(optional, but you want it)* — declare it and the platform draws the **standard title
-  screen** over your `TITLE` phase: the game name, then **three buttons, one colour each, in this
-  order and never any other**:
+### Who draws what
 
-  | # | button | colour | what it does |
-  |---|---|---|---|
-  | 1 | **How to Play** | **grey** outline | opens an overlay listing your `howTo` lines |
-  | 2 | **▶ PLAY** | **green** `#7CFC9B`, filled | starts the game |
-  | 3 | **RETURN TO GAMEFILM** | **purple** `#6a6af0`, outlined | leaves the game, back to the hub |
+| | drawn by | notes |
+|---|---|---|
+| Title screen: **▶ PLAY** (green `#7CFC9B`) | **harness** | over your `TITLE` phase |
+| Title screen: **RETURN TO GAMEFILM** (purple `#6a6af0`) | **harness** | and again at game-over |
+| Help (?) / pause / music / sound bar | **harness** | centered along the bottom |
+| **How-to-play page** | **YOUR GAME** | see `renderHowTo` below |
+| Everything else on screen | your game | |
 
-  Top to bottom, always that order and those colours. A player should never have to re-learn the
-  furniture from one game to the next, so this is not a suggestion you restyle.
+- **You do not build a title screen, a PLAY button, a RETURN button, or a pause button.** The harness
+  draws all four over your game. Drawing your own gives the player two of each, in slightly different
+  places — the harness cannot see what you have drawn, so this is a rule, not a hint.
 
-  You still own starting the game — PLAY (and any tap outside the other two buttons) falls through
-  to your own tap detection, so the *first recorded input is the tap that starts play*. RETURN only
-  appears when there is somewhere to return to (hub play, or the studio preview). Requires
-  `getState()` to report `phase === 'TITLE'` before play begins. Keep each `howTo` line to a short
-  sentence. Omitted → no standard title at all and you must draw your own, which is strictly more
-  work for a worse result — **declare it**.
+- **You DO build your own how-to-play page** — export `renderHowTo(ctx, W, H)` on your game instance.
+  The platform decides *when* to show it — the **? button** in the control bar opens it at any moment,
+  and the pause button does too (pausing and explaining are the same thing here); tapping again
+  resumes. The platform clears the background first; you draw the page. It is your game, so explain it in
+  your own art and vocabulary — the controls, the scoring, what kills you. A generic bullet list
+  cannot teach a game as well as the game can. If you omit `renderHowTo`, the harness falls back to
+  rendering `GAME_META.howTo` lines, and pause still works.
+
+- **`howTo`** *(optional)* — an array of short instruction lines, used only as the fallback when you
+  do not implement `renderHowTo`. Prefer `renderHowTo`.
+
+- **Saving the score is entirely the harness's job. Your game must simply END.** When `isOver()`
+  returns true the runtime reads `getResult()` and handles everything else: persist-first to
+  `localStorage` before any network, background upload with retries, recovery if the player leaves
+  mid-upload, and (for studio games) handing the result to the host shell to submit. The server then
+  **re-derives your score by replaying the recorded frames** — a client-claimed score is never
+  trusted. At game-over the platform holds the RETURN button back while the upload is genuinely in
+  flight, so a player does not wander off mid-save — but it always arms within ~6s no matter what,
+  because being unable to leave is worse than an unconfirmed upload (the run is already saved
+  locally). So the whole contract for getting on the leaderboard is: `isOver()` must eventually return
+  `true`, and `getResult()` must return the fields you declared in `GAME_META.result.fields`. **A game
+  whose `isOver()` never flips saves nothing, silently** — there is no error to see, because nothing
+  failed.
+
+- **Input: use a declared `input.type`** — `joystick`, `paddle`, or `bitmask`. The platform supplies
+  the input layer, and every type gives the chrome first refusal on a tap before your game sees it. A
+  game may supply its own `createInput(canvas, W, H, getScale, meta)`, but then it **must** implement
+  the full contract — `read()`, `type`, `setUiTapHandler(fn)`, `injectTap(gx, gy)`. Miss
+  `setUiTapHandler` and every platform button silently stops receiving taps on touch devices. Prefer
+  the built-ins.
+
 - You declare nothing about seeding. Every game draws from one shared global seed per period
   (an HMAC of the period number), and boards stay separate because a leaderboard keys on
   **game type + seed**, not on the seed alone.

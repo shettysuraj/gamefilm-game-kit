@@ -392,19 +392,31 @@ export function createRecorder() {
 // --- Timeline (analytics snapshots) ---
 // Periodically captures game state for AI analysis.
 
-export function createTimeline(interval = 30) {
+export function createTimeline(interval = 30, fps = 60) {
   const entries = [];
   let frameCount = 0;
 
+  // Elapsed milliseconds, DERIVED FROM THE FRAME COUNT — never from a clock. The loop is a fixed
+  // timestep, so frames are the only monotonic quantity that is identical on the player's device and
+  // on the server during replay. `Date.now()`/`performance.now()` would make every replay diverge and
+  // are soft-flagged by the static scan for exactly this reason (Law 1).
+  //
+  // Stamped on EVERY entry so every game carries a millisecond clock in its replay data whether or
+  // not it scores on time. `f` was always here; `t` just spares every reader from knowing the 60 Hz
+  // convention to recover a duration.
+  const ms = () => Math.round((frameCount * 1000) / fps);
+
   return {
+    elapsedMs: ms,
+    frames() { return frameCount; },
     tick(snapshot) {
       frameCount++;
       if (frameCount % interval === 0) {
-        entries.push({ f: frameCount, ...snapshot });
+        entries.push({ f: frameCount, t: ms(), ...snapshot });
       }
     },
     forceSnapshot(snapshot) {
-      entries.push({ f: frameCount, ...snapshot });
+      entries.push({ f: frameCount, t: ms(), ...snapshot });
     },
     getEntries() { return entries; },
     reset() { entries.length = 0; frameCount = 0; },
