@@ -364,14 +364,19 @@ function drawControls(ctx, W, H, paused, bgmMuted, sfxMuted) {
   ctx.restore();
 }
 
-// Standard title screen — game name + START + How to Play. Drawn only for games that DECLARE
+// Standard title screen — game name + How to Play / PLAY / RETURN TO GAMEFILM. Drawn only for games that DECLARE
 // GAME_META.howTo AND expose getState().phase === 'TITLE'. The game keeps its own start-on-tap; the
 // runtime just supplies consistent chrome. Single source of truth for the button geometry so draw
 // and hit-test agree.
 function titleLayout(W, H) {
   const bw = Math.round(W * 0.56), bx = Math.round((W - bw) / 2);
-  const startY = Math.round(H * 0.52);
-  return { bx, bw, startY, startH: 50, howToY: startY + 64, howToH: 40 };
+  // Three buttons, one colour each, ALWAYS this order top-to-bottom — How to Play (grey),
+  // PLAY (green), RETURN TO GAMEFILM (purple #6a6af0, the same purple as the game-over button so
+  // "leave" looks identical wherever a player meets it). Fixed order and fixed colours are the point:
+  // a player should not have to re-learn the furniture for every game.
+  const howToY = Math.round(H * 0.50);
+  const playY = howToY + 52;
+  return { bx, bw, howToY, howToH: 40, playY, playH: 50, returnY: playY + 62, returnH: 40 };
 }
 
 function drawWrapped(ctx, text, cx, y, maxW, lineH) {
@@ -387,7 +392,7 @@ function drawWrapped(ctx, text, cx, y, maxW, lineH) {
   return lines.length;
 }
 
-function drawTitle(ctx, W, H, name, showHowTo, howTo) {
+function drawTitle(ctx, W, H, name, showHowTo, howTo, canReturn) {
   const L = titleLayout(W, H);
   ctx.save();
   ctx.textAlign = 'center';
@@ -397,13 +402,13 @@ function drawTitle(ctx, W, H, name, showHowTo, howTo) {
   ctx.font = `bold ${Math.round(W * 0.085)}px "Courier New", monospace`;
   ctx.fillText((name || 'GAME').toUpperCase(), W / 2, Math.round(H * 0.33));
 
-  // START (visual — any tap outside the How-to-Play button starts the game)
+  // PLAY (visual — any tap outside the other two buttons starts the game)
   ctx.fillStyle = '#7CFC9B';
-  ctx.fillRect(L.bx, L.startY, L.bw, L.startH);
+  ctx.fillRect(L.bx, L.playY, L.bw, L.playH);
   ctx.fillStyle = '#06120a';
   ctx.textBaseline = 'middle';
   ctx.font = `bold ${Math.round(W * 0.05)}px "Courier New", monospace`;
-  ctx.fillText('▶ START', W / 2, L.startY + L.startH / 2);
+  ctx.fillText('▶ PLAY', W / 2, L.playY + L.playH / 2);
 
   // How to Play (outlined button)
   ctx.strokeStyle = 'rgba(255,255,255,0.5)';
@@ -412,6 +417,19 @@ function drawTitle(ctx, W, H, name, showHowTo, howTo) {
   ctx.fillStyle = 'rgba(255,255,255,0.85)';
   ctx.font = `${Math.round(W * 0.036)}px "Courier New", monospace`;
   ctx.fillText('How to Play', W / 2, L.howToY + L.howToH / 2);
+
+  // RETURN TO GAMEFILM (purple, outlined) — only when there is somewhere to return TO: real hub play
+  // has a returnUrl, the studio/review sandbox exits to its parent. Standalone has neither.
+  if (canReturn) {
+    ctx.strokeStyle = '#6a6af0';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(L.bx, L.returnY, L.bw, L.returnH);
+    ctx.fillStyle = 'rgba(106,106,240,0.08)';
+    ctx.fillRect(L.bx, L.returnY, L.bw, L.returnH);
+    ctx.fillStyle = '#6a6af0';
+    ctx.font = `bold ${Math.round(W * 0.034)}px "Courier New", monospace`;
+    ctx.fillText('RETURN TO GAMEFILM', W / 2, L.returnY + L.returnH / 2);
+  }
   ctx.textBaseline = 'alphabetic';
 
   // How-to-Play overlay
@@ -531,12 +549,15 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
       if (gx > L.bgm - L.hx && gx < L.bgm + L.hx) { audio.toggleBGM(); return true; }
       if (gx > L.sfx - L.hx && gx < L.sfx + L.hx) { audio.toggleSFX(); return true; }
     }
-    // Standard title: How-to-Play button opens the overlay. START/tap-elsewhere falls through to the
+    // Standard title: How-to-Play and RETURN are handled here; PLAY/tap-elsewhere falls through to the
     // game so it starts on its own tap detection (that tap is the first recorded PLAY input).
     if (howToLines && !done && game.getState?.()?.phase === 'TITLE') {
       const T = titleLayout(W, H);
       if (gx >= T.bx && gx <= T.bx + T.bw && gy >= T.howToY && gy <= T.howToY + T.howToH) {
         showHowTo = true; return true;
+      }
+      if (canReturn && gx >= T.bx && gx <= T.bx + T.bw && gy >= T.returnY && gy <= T.returnY + T.returnH) {
+        doReturn(); return true;
       }
     }
     return false;
@@ -699,7 +720,7 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
       // Standard title screen — game name + START + How to Play, drawn on top of the game's own TITLE
       // render. Opt-in: a game gets it by declaring GAME_META.howTo and exposing phase === 'TITLE'.
       if (howToLines && !done && game.getState?.()?.phase === 'TITLE') {
-        drawTitle(ctx, W, H, gameMod.GAME_META?.name, showHowTo, howToLines);
+        drawTitle(ctx, W, H, gameMod.GAME_META?.name, showHowTo, howToLines, canReturn);
       }
 
       if (done && result) {

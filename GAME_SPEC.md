@@ -133,7 +133,8 @@ Do **not** build any of this — you inherit it by conforming:
 - **Anticheat** (input-type defaults: joystick / paddle / bitmask heuristics)
 - **Leaderboards** (cron snapshots) and cross-version **replay viewer**
 - **AI coaching** (generic adapter, driven by your `SCHEMA`)
-- Pause / mute bar, UNRANKED badge, game-over RETURN button
+- Pause / mute bar, UNRANKED badge, and the purple **RETURN TO GAMEFILM** button — on the
+  title screen and again at game-over (see `howTo` and `hud` in §5). You draw none of it.
 - **The entire HTML shell, seeding, and navigation** — you never write `index.html`, never
   handle the seed (the hub computes it and hands it to `createGame(seed)`), never wire return
   links. The runtime template handles bfcache, swipe-guards, the bug widget, and same-tab nav.
@@ -199,9 +200,11 @@ export const GAME_META = {
 ```
 
 - **Standard controls are always on.** Every game gets the platform's **pause / music / sound**
-  buttons as a centered bar along the bottom, plus the purple **RETURN TO GAMEFILM** button at
-  game-over — drawn by the runtime, no game code, identical across all games. Don't draw your own;
-  and if your game has a bespoke control scheme it must handle, opt out with `hud: { controls: false }`.
+  buttons as a centered bar along the bottom, plus the purple **RETURN TO GAMEFILM** button
+  (`#6a6af0`) at game-over — drawn by the runtime, no game code, identical across all games.
+  **Never draw your own version of any of these.** The game-over RETURN button in particular is
+  automatic: a game that paints its own ends up with two, in slightly different places. If your game
+  has a bespoke control scheme it must handle, opt out with `hud: { controls: false }`.
 - **`hud`** *(optional)* — governs the **scoreboard** only (the controls above are already standard).
   `hud: true` draws the score (read from `getState().score`) top-center. Omitted or `false` → you
   draw your own score (the default). `{ controls: false }` opts OUT of the standard control bar.
@@ -211,12 +214,25 @@ export const GAME_META = {
   custom tune supply an object: `{ melody: [{ note: 440, dur: 0.5 }, …], chords: [[…]], wave }`
   (`note` in Hz, `0` = rest; `wave` is `'triangle' | 'square' | 'sawtooth' | 'sine'`). Omitted =
   `'ambient'`, so existing games are unchanged.
-- **`howTo`** *(optional)* — declare it and the platform draws the **standard title screen** over your
-  `TITLE` phase: the game name, a green **START** button, and a **How to Play** button that opens an
-  overlay listing these lines. You still own starting the game — START (and any tap outside How-to-Play)
-  falls through to your own tap detection, so the *first recorded input is the tap that starts play*.
-  Requires `getState()` to report `phase === 'TITLE'` before play begins. Omitted → no standard title
-  (your game draws its own), so existing games are unchanged. Keep each line to a short sentence.
+- **`howTo`** *(optional, but you want it)* — declare it and the platform draws the **standard title
+  screen** over your `TITLE` phase: the game name, then **three buttons, one colour each, in this
+  order and never any other**:
+
+  | # | button | colour | what it does |
+  |---|---|---|---|
+  | 1 | **How to Play** | **grey** outline | opens an overlay listing your `howTo` lines |
+  | 2 | **▶ PLAY** | **green** `#7CFC9B`, filled | starts the game |
+  | 3 | **RETURN TO GAMEFILM** | **purple** `#6a6af0`, outlined | leaves the game, back to the hub |
+
+  Top to bottom, always that order and those colours. A player should never have to re-learn the
+  furniture from one game to the next, so this is not a suggestion you restyle.
+
+  You still own starting the game — PLAY (and any tap outside the other two buttons) falls through
+  to your own tap detection, so the *first recorded input is the tap that starts play*. RETURN only
+  appears when there is somewhere to return to (hub play, or the studio preview). Requires
+  `getState()` to report `phase === 'TITLE'` before play begins. Keep each `howTo` line to a short
+  sentence. Omitted → no standard title at all and you must draw your own, which is strictly more
+  work for a worse result — **declare it**.
 - You declare nothing about seeding. Every game draws from one shared global seed per period
   (an HMAC of the period number), and boards stay separate because a leaderboard keys on
   **game type + seed**, not on the seed alone.
