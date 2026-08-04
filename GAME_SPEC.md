@@ -234,6 +234,61 @@ export const GAME_META = {
 | **How-to-play page** | **YOUR GAME** | see `renderHowTo` below |
 | Everything else on screen | your game | |
 
+- **Your `TITLE` phase must NOT render the playfield.** Draw your background, your title art and a
+  one-line strapline — then `return`. Do not draw the board, the HUD, the score, or a live/demo game
+  behind it. The harness lays PLAY and RETURN over this screen, and on top of a populated playfield
+  they read as though the game has already started; the player cannot tell what is interactive. A
+  simple starfield or gradient behind the wordmark is the house look:
+
+  ```js
+  render(ctx, W, H) {
+    drawBackground(ctx, W, H);
+    if (phase === 'TITLE') { drawStars(ctx); drawTitleArt(ctx, W, H); return; }   // ← stop here
+    drawHud(ctx); drawBoard(ctx);
+  }
+  ```
+
+- **The house backdrop is a drifting starfield**, and it should move. Three parallax layers — far
+  stars small, dim and slow; near stars larger, brighter and faster — drifting downward and wrapping.
+  The motion is what makes a title screen feel alive rather than a screenshot.
+
+  ```js
+  // Layout from a FIXED hash, motion DERIVED from the frame count. Never the sim PRNG (decoration
+  // must not consume sim randomness or gameplay changes), and never Date.now()/Math.random in a way
+  // the sim can see. Deriving y instead of mutating it means no per-run state and no wrap bookkeeping.
+  const y = (star.y + frames * star.v) % H;    // v ≈ 0.10 far, 0.26 mid, 0.52 near
+  ctx.fillStyle = `rgba(200,215,255,${star.a})`;
+  ctx.fillRect(star.x, y, star.s, star.s);
+  ```
+
+  ~90 stars is plenty at 390×844. Keep it behind everything else, and keep it on the title — most
+  games hide it once play starts so it never competes with the board.
+
+- **You DO draw your game's title art**, and it should look like it belongs on the platform. The
+  harness draws the buttons over your `TITLE` phase but deliberately draws no name — your title is
+  yours. The house style is a heavy **Orbitron** wordmark with stacked drop-shadow layers, which is
+  what gives it depth on a dark field:
+
+  ```js
+  ctx.font = '900 72px "Orbitron", sans-serif';   // 56–72px; scale to fit the width
+  ctx.textAlign = 'center';
+  const cx = W / 2, titleY = H * 0.17;            // upper third, above the buttons
+  for (const l of [                                // back-to-front, darkest first
+    { color: '#333333', ox: 8, oy: 8 },
+    { color: '#666666', ox: 5, oy: 5 },
+    { color: '#999999', ox: 3, oy: 3 },
+    { color: '#CCCCCC', ox: 1, oy: 1 },
+  ]) { ctx.fillStyle = l.color; ctx.fillText('YOUR GAME', cx + l.ox, titleY + l.oy); }
+  ctx.fillStyle = '#FFFFFF';                       // crisp top layer last
+  ctx.fillText('YOUR GAME', cx, titleY);
+  ```
+
+  **Orbitron is supplied by the platform** — hub-hosted and studio-sandboxed games both get it, so
+  you can name it in `ctx.font` without shipping or fetching a font (Law 3 still forbids font files
+  of your own; `sans-serif` is the fallback). Keep the title in the **upper third**: the harness's
+  PLAY and RETURN buttons occupy from about 52% of the height down, and the control bar sits at the
+  very bottom. A one-line strapline under the wordmark (level count, core verb) is the convention.
+
 - **You do not build a title screen, a PLAY button, a RETURN button, or a pause button.** The harness
   draws all four over your game. Drawing your own gives the player two of each, in slightly different
   places — the harness cannot see what you have drawn, so this is a rule, not a hint.
@@ -262,7 +317,17 @@ export const GAME_META = {
   whose `isOver()` never flips saves nothing, silently** — there is no error to see, because nothing
   failed.
 
-- **Input: use a declared `input.type`** — `joystick`, `paddle`, or `bitmask`. The platform supplies
+- **Input: use a declared `input.type`** — `joystick`, `pointer`, `paddle`, or `bitmask`. Pick by how
+  the game is actually played:
+  - `pointer` — **games played by touching the board**: tile grids, match/merge, anything with
+    press/drag/swipe. You get `{ x, y, d }` (position + finger down). **Use this for a tap or swipe
+    game.** `joystick` is actively wrong here: it treats every touch as a virtual stick, so a touch
+    is a DRAG and only a near-stationary one counts as a tap — the game ends up needing
+    "drag, then click", which is exactly as bad as it sounds.
+  - `joystick` — directional movement, optionally with `discreteMove: true` for one step per push.
+  - `paddle` — a single horizontal axis.
+  - `bitmask` — discrete buttons. **Keyboard only — there is no touch path**, so a bitmask game is
+    unplayable on a phone and violates Law 4. The platform supplies
   the input layer, and every type gives the chrome first refusal on a tap before your game sees it. A
   game may supply its own `createInput(canvas, W, H, getScale, meta)`, but then it **must** implement
   the full contract — `read()`, `type`, `setUiTapHandler(fn)`, `injectTap(gx, gy)`. Miss
