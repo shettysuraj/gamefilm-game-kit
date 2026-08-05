@@ -1269,6 +1269,13 @@ export async function boot(slug, opts = {}) {
     }
   }).observe(document.body, { childList: true });
 
+  // Where the game module lives. Live play serves it at /play/{slug}/game.js, but a CROSS-VERSION
+  // replay is served out of the immutable cartridge (/cartridge/{slug}/v{N}/client/), whose own
+  // archived game.js sits beside index.html. `moduleBase` must therefore be honoured rather than
+  // assumed: booting /play/{slug}/game.js from a cartridge page would silently run the CURRENT
+  // engine against an OLD recording — a divergent replay, which is worse than failing loudly.
+  const base = opts.moduleBase || `/play/${slug}`;
+
   // Dev-console / sandbox path: boot from an INJECTED source string (the unsaved game.js the
   // parent posted in) by importing a blob URL — no file on a server. Otherwise import the
   // game from its served path. Requires the sandbox CSP to allow `script-src 'self' blob:`.
@@ -1278,7 +1285,7 @@ export async function boot(slug, opts = {}) {
       const blobUrl = URL.createObjectURL(new Blob([opts.source], { type: 'text/javascript' }));
       try { gameMod = await import(blobUrl); } finally { URL.revokeObjectURL(blobUrl); }
     } else {
-      gameMod = await import(`/play/${slug}/game.js`);
+      gameMod = await import(`${base}/game.js`);
     }
   } catch (e) {
     showStatus(root, `Failed to load game: ${e.message}`);
@@ -1305,7 +1312,7 @@ export async function boot(slug, opts = {}) {
     } catch { /* bad audio.js — keep central; a broken soundtrack must never break the game */ }
   } else if (!opts.source) {
     try {
-      const ga = await import(`/play/${slug}/audio.js`);
+      const ga = await import(`${base}/audio.js`);
       if (ga && typeof ga.startBGM === 'function') audio = ga;
     } catch { /* no per-game audio module — use central */ }
   }
