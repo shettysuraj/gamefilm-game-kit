@@ -74,7 +74,7 @@ carry over from week to week and keeps scores meaningful.
 **Rules of thumb:**
 - **Bound every seeded rule to a range around a sane centre** (POP keeps every multiplier roughly
   centred on ×1.0). No seed may produce an unwinnable or trivial week. **Sweep many seeds when you
-  test**, not just one. The Studio's 🎲 and `verify` (N seeds) are there for exactly this.
+  test**, not just one. The 🎲 on the test page (gamefilm.org/test) and `verify` (N seeds) are there for exactly this.
 - **Roll the week's rules once, up front, from the seed, in a fixed order.** Don't let them drift
   during play. Changing the draw order or the ranges changes every future week, so it's an
   `ENGINE_VERSION` bump.
