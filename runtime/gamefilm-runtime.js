@@ -293,6 +293,20 @@ function setupCanvas(root, meta) {
   resize();
   window.addEventListener('resize', resize);
 
+  // The canvas is CONTAIN-fitted, so on any viewport whose aspect is not W:H there is dead margin —
+  // 42px each side on an iPhone 14, 60px on an SE. EVERY input listener in this file binds to the
+  // canvas, so a touch starting in that margin reaches only <body>, nothing calls preventDefault,
+  // and the browser's edge-swipe-back gesture fires and destroys the run in progress.
+  //
+  // The margin is not playable area, but it must not be an exit either. Swallow gestures that begin
+  // on the letterbox background specifically — matching on the known background elements rather than
+  // "not the canvas", so overlay buttons and replay controls keep their taps.
+  const bg = (t) => t === document.body || t === document.documentElement
+    || t === root || t === wrapper;
+  const swallow = (e) => { if (bg(e.target)) e.preventDefault(); };
+  document.addEventListener('touchstart', swallow, { passive: false });
+  document.addEventListener('touchmove', swallow, { passive: false });
+
   return { canvas, ctx, W, H, getScale: () => scale };
 }
 
@@ -348,7 +362,53 @@ function fmtTime(frames) {
   return m + ':' + String(s).padStart(2, '0');
 }
 
+// The seek bar's CSS lived in the page shell — and in FOUR of them (the runtime template plus
+// bricks/shapes/amphibian's own index.html), while the studio sandbox shell had none at all, so the
+// replay controls rendered unstyled there. Playback chrome belongs to the harness, not to each
+// game's HTML, so the runtime now injects its own. Appended to <head> after any shell copy, so it
+// wins on source order at equal specificity without needing !important.
+function injectSeekStyles() {
+  if (document.getElementById('gf-seek-style')) return;
+  const st = document.createElement('style');
+  st.id = 'gf-seek-style';
+  st.textContent = [
+    // Bigger targets throughout: the old bar was 8px of track and an 11px button, which is under
+    // half the ~44px minimum a thumb can reliably hit.
+    '#gf-seek{position:fixed;bottom:52px;left:50%;transform:translateX(-50%);width:94%;max-width:420px;',
+    'padding:16px 18px;background:rgba(0,0,0,0.82);border-radius:16px;display:flex;align-items:center;',
+    'flex-wrap:wrap;gap:14px;z-index:50;transition:transform .28s ease,opacity .28s ease;backdrop-filter:blur(6px)}',
+    // Slide clear of the viewport rather than fading in place, so nothing dims the replay.
+    '#gf-seek.gf-seek-away{transform:translateX(-50%) translateY(160%);opacity:0;pointer-events:none}',
+    '.gf-speed-btn{font-family:"Courier New",monospace;font-size:16px;font-weight:700;color:#e8eaf0;',
+    'background:rgba(255,255,255,0.14);border:1px solid rgba(255,255,255,0.25);border-radius:10px;',
+    'padding:10px 14px;cursor:pointer;white-space:nowrap;min-width:52px;text-align:center}',
+    '.gf-speed-btn:active{background:rgba(255,255,255,0.26)}',
+    // The touch target is 28px tall; the visible rail is 10px, centred inside it via a pseudo
+    // element. Padding would have offset the fill, so the rail is drawn rather than sized.
+    '.gf-seek-track{flex:1;height:28px;cursor:pointer;position:relative;display:flex;align-items:center}',
+    '.gf-seek-track::before{content:"";position:absolute;left:0;right:0;height:10px;',
+    'background:rgba(255,255,255,0.18);border-radius:5px}',
+    '.gf-seek-fill{height:10px;background:#6a6af0;border-radius:5px;width:0;pointer-events:none;position:relative}',
+    '.gf-seek-thumb{position:absolute;right:-13px;top:50%;transform:translateY(-50%);width:26px;height:26px;',
+    'background:#fff;border-radius:50%;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,0.5)}',
+    '.gf-seek-time{font-family:"Courier New",monospace;font-size:14px;color:#c9c8e8;white-space:nowrap;',
+    'min-width:92px;text-align:right}',
+    // Savepoint row (docs/ADR-004). Lives INSIDE the seek bar as a wrapped second row rather than as
+    // its own fixed element, so it inherits the bar's positioning, backdrop and auto-hide instead of
+    // needing a second copy of all three — and it can never drift out of sync with them.
+    '.gf-sp-row{flex-basis:100%;display:flex;align-items:center;gap:10px;',
+    'border-top:1px solid rgba(255,255,255,0.14);padding-top:12px;margin-top:2px}',
+    '.gf-sp-btn{font-family:"Courier New",monospace;font-size:14px;font-weight:700;color:#0a0b10;',
+    'background:#5ee08a;border:none;border-radius:10px;padding:11px 14px;cursor:pointer;white-space:nowrap}',
+    '.gf-sp-btn:active{background:#46c471}',
+    '.gf-sp-btn[disabled]{background:rgba(255,255,255,0.18);color:#8b8fa8;cursor:default}',
+    '.gf-sp-note{font-family:"Courier New",monospace;font-size:12px;color:#c9c8e8;line-height:1.35}',
+  ].join('');
+  document.head.appendChild(st);
+}
+
 function createSeekBar(root, totalFrames, onSeek) {
+  injectSeekStyles();
   const bar = document.createElement('div');
   bar.id = 'gf-seek';
   bar.innerHTML = '<button class="gf-speed-btn">1x</button><div class="gf-seek-track"><div class="gf-seek-fill"><div class="gf-seek-thumb"></div></div></div><div class="gf-seek-time">0:00 / ' + fmtTime(totalFrames) + '</div>';
@@ -360,6 +420,36 @@ function createSeekBar(root, totalFrames, onSeek) {
   const totalTime = fmtTime(totalFrames);
   let dragging = false;
 
+  // Controls get out of the way of the film: they slide off after IDLE_MS of playback and come back
+  // on any tap. Hiding is suppressed by TWO independent hold sources — the viewer's drag, and the
+  // replay's own state (paused / ended). Separate booleans rather than one flag, because releasing
+  // either must not cancel the other: finishing a scrub while paused has to leave the bar up.
+  // A control that vanishes while you are using it is worse than one that never hides.
+  const IDLE_MS = 3000;
+  let hideTimer = null;
+  let dragHold = false, replayHold = false;
+  const heldNow = () => dragHold || replayHold;
+
+  function arm() {
+    clearTimeout(hideTimer);
+    hideTimer = null;
+    if (heldNow()) return;
+    hideTimer = setTimeout(() => { if (!heldNow()) bar.classList.add('gf-seek-away'); }, IDLE_MS);
+  }
+  function wake() { bar.classList.remove('gf-seek-away'); arm(); }
+  function sync() {
+    if (heldNow()) { clearTimeout(hideTimer); hideTimer = null; bar.classList.remove('gf-seek-away'); }
+    else arm();
+  }
+  function holdWhile(v) { dragHold = v; sync(); }
+
+  // One listener on the document rather than on the canvas: the bar is a fixed-position sibling of
+  // the playfield, so a tap on either must count as activity, and a game may swallow canvas events.
+  // pointerdown covers mouse and touch alike and fires before click, so the bar is already back
+  // before any handler that acts on the tap runs.
+  document.addEventListener('pointerdown', wake);
+  arm();
+
   function updateFromEvent(e) {
     const rect = track.getBoundingClientRect();
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -370,20 +460,46 @@ function createSeekBar(root, totalFrames, onSeek) {
     onSeek(frame);
   }
 
-  track.addEventListener('mousedown', e => { dragging = true; updateFromEvent(e); });
+  track.addEventListener('mousedown', e => { dragging = true; holdWhile(true); updateFromEvent(e); });
   document.addEventListener('mousemove', e => { if (dragging) updateFromEvent(e); });
-  document.addEventListener('mouseup', () => { dragging = false; });
-  track.addEventListener('touchstart', e => { e.preventDefault(); updateFromEvent(e); }, { passive: false });
+  document.addEventListener('mouseup', () => { if (dragging) { dragging = false; holdWhile(false); } });
+  track.addEventListener('touchstart', e => { e.preventDefault(); holdWhile(true); updateFromEvent(e); }, { passive: false });
   track.addEventListener('touchmove', e => { e.preventDefault(); updateFromEvent(e); }, { passive: false });
+  const endTouch = () => holdWhile(false);
+  track.addEventListener('touchend', endTouch);
+  track.addEventListener('touchcancel', endTouch);
 
   const speedBtn = bar.querySelector('.gf-speed-btn');
 
   return {
     update(frame) {
+      // Deliberately does NOT re-arm — this runs every frame, and treating playback as activity
+      // would mean the bar never hides.
       fill.style.width = ((frame / totalFrames) * 100) + '%';
       timeEl.textContent = fmtTime(frame) + ' / ' + totalTime;
     },
     speedBtn,
+    wake,
+    // The replay's own hold — paused or ended. Independent of the drag hold above.
+    hold(v) { replayHold = v; sync(); },
+    // Savepoint row (docs/ADR-004), added only when the run is eligible. Returns a setter for the
+    // label so the caller can keep it in step with the scrub position.
+    addSavepointRow(onClick) {
+      const row = document.createElement('div');
+      row.className = 'gf-sp-row';
+      const btn = document.createElement('button');
+      btn.className = 'gf-sp-btn';
+      btn.textContent = 'RUN FROM HERE';
+      const note = document.createElement('div');
+      note.className = 'gf-sp-note';
+      row.appendChild(btn);
+      row.appendChild(note);
+      bar.appendChild(row);
+      btn.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+      return {
+        set(text, enabled) { note.textContent = text; btn.disabled = !enabled; },
+      };
+    },
   };
 }
 
@@ -562,7 +678,77 @@ function drawHowTo(ctx, W, H, howTo) {
   ctx.restore();
 }
 
-async function runLiveGame(root, gameMod, seed, input, canvasState) {
+// The neutral input for a game's input type — what the sim sees on a frame the player recorded
+// nothing for. Shared by replay scrubbing and savepoint resume so they can never disagree.
+function defaultInputFor(gameMod) {
+  const canvasW = gameMod.GAME_META?.canvas?.width || 390;
+  switch (gameMod.GAME_META?.input?.type || 'bitmask') {
+    case 'paddle': return canvasW / 2;
+    case 'joystick': return { dx: 0, dy: 0, b: 0 };
+    case 'pointer': return { x: -1, y: -1, d: 0 };
+    default: return 0;
+  }
+}
+
+function toInputMap(frames) {
+  const m = new Map();
+  for (const f of frames) m.set(f.f, f.s);
+  return m;
+}
+
+// Reconstruct exact game state at `targetFrame` by re-running the sim from the seed. The sim is
+// deterministic, so frame N is always exactly this many updates away from createGame() — this one
+// mechanism is behind both replay scrubbing and savepoint resume (docs/ADR-004).
+//
+// Cheap enough to do synchronously: ~0.4 us/frame measured on Shapes, so a 5-minute run
+// reconstructs in single-digit ms and a slow phone stays well under 200 ms.
+//
+// `onFrame(f, game)` is called after each update, for callers that need to observe state along the
+// way (e.g. collecting legal savepoint boundaries).
+function reconstructAt(gameMod, seed, gameOpts, inputMap, defaultInput, targetFrame, onFrame) {
+  const game = gameMod.createGame(seed, gameOpts);
+  let lastInput = defaultInput;
+  let f = 0;
+  for (; f < targetFrame && !game.isOver(); f++) {
+    if (inputMap.has(f)) lastInput = inputMap.get(f);
+    game.update(lastInput);
+    if (onFrame) onFrame(f, game);
+  }
+  return { game, lastInput, reached: f };
+}
+
+// Frames a savepoint may legally start from. A game declares the getState() field whose change marks
+// a decision boundary (`GAME_META.savepoint.snapField` — 'lockCount' for Shapes, i.e. one boundary
+// per placed piece); without one, every frame is legal.
+//
+// Derived by REPLAYING the run, never from the stored timeline: `forceSnapshot` spreads the event
+// over `f`, so event entries carry the GAME's internal frame counter while `tick` entries carry the
+// timeline's — and the game's counter is 1-based against the recorder's 0-based index because the
+// TITLE branch returns before `frame++`. Re-running produces indices in the recorder's basis, which
+// is the only basis the submitted frame stream is expressed in.
+function savepointBoundaries(gameMod, seed, gameOpts, frames) {
+  const snapField = gameMod.GAME_META?.savepoint?.snapField;
+  const total = frames.length > 0 ? frames[frames.length - 1].f : 0;
+  if (!snapField) return { boundaries: null, total };
+
+  const out = [];
+  let prev = null;
+  reconstructAt(
+    gameMod, seed, gameOpts, toInputMap(frames), defaultInputFor(gameMod), total + 1,
+    (f, game) => {
+      const v = typeof game.getState === 'function' ? game.getState()?.[snapField] : undefined;
+      // The boundary is the frame AFTER the change — the first frame of the next piece.
+      if (prev !== null && v !== prev) out.push(f + 1);
+      prev = v;
+    },
+  );
+  return { boundaries: out, total };
+}
+
+// `resume` (docs/ADR-004): { frames, frame, sensitivity } — the player's own earlier run, the frame
+// to pick it up from, and the sensitivity it was played at (locked, because it is a deterministic
+// input: same frames at a different sensitivity produce a different score).
+async function runLiveGame(root, gameMod, seed, input, canvasState, resume) {
   const { ctx, W, H } = canvasState;
   const hud = gameMod.GAME_META?.hud;   // standard HUD opt-in (see render); undefined = off
   // The platform ALWAYS has something to put behind How to Play: the author's howTo lines if they
@@ -572,11 +758,22 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
   const howToLines = Array.isArray(gameMod.GAME_META?.howTo) && gameMod.GAME_META.howTo.length
     ? gameMod.GAME_META.howTo
     : (gameMod.GAME_META?.description ? [gameMod.GAME_META.description] : null);
-  const game = gameMod.createGame(seed);
+  // Savepoint resume: rebuild the player's own earlier run up to `resume.frame`, then hand the
+  // controls back. `prefix ++ continuation` is ONE contiguous stream (see createRecorder), so the
+  // server verifies it exactly like a run played straight through — no server change at all.
+  // skipTitle is mandatory here: the title screen is where sensitivity is chosen, and a resumed run
+  // must not be able to change it.
+  const prefix = resume ? resume.frames.filter(f => f.f < resume.frame) : null;
+  const gameOpts = resume ? { skipTitle: true, sensitivity: resume.sensitivity } : undefined;
+  const game = resume
+    ? reconstructAt(gameMod, seed, gameOpts, toInputMap(prefix), defaultInputFor(gameMod), resume.frame).game
+    : gameMod.createGame(seed);
   const initSnap = typeof game.getState === 'function' ? game.getState() : null;
   if (initSnap?.phase && initSnap.phase !== 'PLAY') document.body.classList.add('gf-title');
-  const recorder = createRecorder();
-  const timeline = createTimeline(30);
+  const recorder = resume
+    ? createRecorder({ initialFrames: prefix, startFrame: resume.frame })
+    : createRecorder();
+  const timeline = createTimeline(30, 60, resume ? resume.frame : 0);
 
   let done = false;
   let result = null;
@@ -640,7 +837,33 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
       .catch(e => { submitState = (e?.offline || !navigator.onLine) ? 'saved-offline' : 'error'; });
   }
 
+  // TRY AGAIN — the next attempt on this savepoint (docs/ADR-004). Deliberately drawn and hit-tested
+  // ONCE, outside the three game-over branches (normal / upload-failed / never-submitted), because a
+  // copy per branch is three chances for the draw and the hit-test to disagree. Sits below whatever
+  // that branch drew, with its own backing panel.
+  //
+  // It cannot mint its own token: the game holds a game token, not the player's identity. So it
+  // bounces through the hub's authenticated /resume route, which claims the next attempt and sends
+  // them back in.
+  const tryAgainLayout = () => {
+    const w = Math.round(W * 0.55), h = 36;
+    return { x: (W - w) / 2, y: Math.round(H * 0.68), w, h };
+  };
+  // Same sandbox caveat as the picker: no top-level navigation from inside the bridge iframe, so the
+  // button is not drawn there rather than drawn dead.
+  const tryAgainVisible = () => !!(done && resume && resume.attemptsRemaining > 0 && returnArmed()
+    && !GameFilm.isBridge());
+  const doTryAgain = () => {
+    const hub = GameFilm.getHubUrl();
+    if (!hub || !resume?.savepointId) return;
+    window.location.href = `${hub}/resume/${encodeURIComponent(resume.savepointId)}`;
+  };
+
   function hitButton(gx, gy) {
+    if (tryAgainVisible()) {
+      const L = tryAgainLayout();
+      if (gx >= L.x && gx <= L.x + L.w && gy >= L.y && gy <= L.y + L.h) { doTryAgain(); return true; }
+    }
     if (done && (submitState === 'error' || submitState === 'saved-offline')) {
       const retryBtnW = Math.round(W * 0.5);
       const retryBtnH = 36;
@@ -1030,6 +1253,19 @@ async function runLiveGame(root, gameMod, seed, input, canvasState) {
           ctx.fillText('RETURN TO GAMEFILM', W / 2, btnY + btnH / 2);
           ctx.textBaseline = 'alphabetic';
         }
+
+        if (tryAgainVisible()) {
+          const L = tryAgainLayout();
+          drawChromePanel(ctx, W, L.y - 14, L.y + L.h + 14);
+          ctx.fillStyle = '#5ee08a';
+          ctx.fillRect(L.x, L.y, L.w, L.h);
+          ctx.fillStyle = '#0a0b10';
+          ctx.font = 'bold 14px "Courier New", monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(`TRY AGAIN (${resume.attemptsRemaining} LEFT)`, W / 2, L.y + L.h / 2);
+          ctx.textBaseline = 'alphabetic';
+        }
       }
 
       if (paused) {
@@ -1098,15 +1334,8 @@ async function runReplay(root, gameMod, replayData, canvasState) {
   let game = gameMod.createGame(seed, gameOpts);
   let seekTarget = null;
 
-  const inputType = gameMod.GAME_META?.input?.type || 'bitmask';
-  const canvasW = gameMod.GAME_META?.canvas?.width || 390;
-  const defaultInput = inputType === 'paddle' ? canvasW / 2
-    : inputType === 'joystick' ? { dx: 0, dy: 0, b: 0 }
-    : inputType === 'pointer' ? { x: -1, y: -1, d: 0 }
-    : 0;
-
-  const inputMap = new Map();
-  for (const f of replayFrames) inputMap.set(f.f, f.s);
+  const defaultInput = defaultInputFor(gameMod);
+  const inputMap = toInputMap(replayFrames);
 
   const seekBar = createSeekBar(root, totalFrames, frame => { seekTarget = frame; });
 
@@ -1121,20 +1350,63 @@ async function runReplay(root, gameMod, replayData, canvasState) {
 
   const returnUrl = GameFilm.getReturnUrl();
 
-  function seekTo(targetFrame) {
-    game = gameMod.createGame(seed, gameOpts);
-    let lastInput = defaultInput;
-    for (let f = 0; f < targetFrame && !game.isOver(); f++) {
-      if (inputMap.has(f)) lastInput = inputMap.get(f);
-      game.update(lastInput);
+  // --- Savepoint picker (docs/ADR-004) ---
+  // The viewer holds a replay token and no identity, so it cannot create a savepoint itself. It picks
+  // the frame and hands it back to the hub, where the user IS authenticated and the credit (if any)
+  // gets spent. Ownership is enforced there too — `savepointEligible` only says the run is
+  // structurally usable (this week's seed, current engine, not a shared link).
+  // NOT offered in bridge mode. A UGC game runs inside the cross-origin sandbox iframe, which has
+  // `allow-scripts` WITHOUT `allow-top-navigation` — `window.location.href` there is blocked and the
+  // button would silently do nothing. Reaching the hub from inside the sandbox needs a new
+  // gamefilm-bridge message for the parent to act on; until that exists, first-party games (which
+  // are served as ordinary pages on gamefilm.org) get the feature and UGC does not.
+  let savepointRow = null;
+  let snapped = null;
+  if (replayData.savepointEligible && replayData.sessionId && GameFilm.getHubUrl() && !GameFilm.isBridge()) {
+    const { boundaries } = savepointBoundaries(gameMod, seed, gameOpts, replayFrames);
+    // A game with no declared snapField gets every frame; one with a snapField but no boundaries
+    // (a run that ended before a single piece landed) gets no offer at all.
+    const stops = boundaries && boundaries.length ? boundaries : null;
+    if (stops || !gameMod.GAME_META?.savepoint?.snapField) {
+      savepointRow = seekBar.addSavepointRow(() => {
+        if (snapped == null) return;
+        const hub = GameFilm.getHubUrl();
+        window.location.href = `${hub}/savepoint/new?session=${encodeURIComponent(replayData.sessionId)}`
+          + `&game=${encodeURIComponent(replayData.gameType)}&frame=${snapped}`;
+      });
+
+      // Snap BACKWARD to the last boundary at or before the playhead: resuming from a point the
+      // player has already watched past is predictable, whereas jumping forward would hand them a
+      // board they never saw.
+      const updateSnap = (frame) => {
+        if (!stops) { snapped = Math.max(1, Math.floor(frame)); savepointRow.set(`from ${fmtTime(snapped)}`, true); return; }
+        let i = -1;
+        for (let k = 0; k < stops.length && stops[k] <= frame; k++) i = k;
+        if (i < 0) { snapped = null; savepointRow.set('scrub past the first piece to pick a point', false); return; }
+        snapped = stops[i];
+        savepointRow.set(`3 attempts from piece ${i + 1} · ${fmtTime(snapped)}`, true);
+      };
+      updateSnap(0);
+      savepointRow.onFrame = updateSnap;
     }
+  }
+
+  function seekTo(targetFrame) {
+    const r = reconstructAt(gameMod, seed, gameOpts, inputMap, defaultInput, targetFrame);
+    game = r.game;
+    // Carry the input that was in effect at the seek target. The stream is delta-compressed, so
+    // unless an entry lands exactly on `targetFrame` the next update would otherwise apply whatever
+    // was held before the scrub — visible as a phantom input for a few frames, and wrong for a
+    // savepoint picker, where the state on screen has to be the state the player resumes into.
+    lastInput = r.lastInput;
     currentFrame = targetFrame;
   }
 
   let lastInput = defaultInput;
   let done = false;
   let paused = false;
-  function setPausedReplay(v) { paused = v; document.body.classList.toggle('gf-paused', v); }
+  // Pausing holds the controls open — a viewer who just stopped the tape is about to scrub.
+  function setPausedReplay(v) { paused = v; document.body.classList.toggle('gf-paused', v); seekBar.hold(v || done); }
 
   document.addEventListener('keydown', e => {
     if (e.code === 'KeyP' || e.code === 'Escape') { setPausedReplay(!paused); e.preventDefault(); }
@@ -1172,6 +1444,8 @@ async function runReplay(root, gameMod, replayData, canvasState) {
         seekTo(seekTarget);
         seekTarget = null;
         done = game.isOver();
+        seekBar.hold(done || paused);   // seeking back off the end releases the end-of-replay hold
+        savepointRow?.onFrame?.(currentFrame);
         return;
       }
       if (done || paused) return;
@@ -1180,7 +1454,10 @@ async function runReplay(root, gameMod, replayData, canvasState) {
       if (typeof audio.onSfx === 'function' && typeof game.getSfx === 'function') audio.onSfx(game.getSfx());
       currentFrame++;
       seekBar.update(currentFrame);
-      if (game.isOver()) done = true;
+      savepointRow?.onFrame?.(currentFrame);
+      // At the end of the tape the controls come back and stay — the viewer's next action is
+      // always to scrub or re-watch, and hiding them there is a dead end.
+      if (game.isOver()) { done = true; seekBar.hold(true); }
     },
     render() {
       game.render(ctx, W, H);
@@ -1395,5 +1672,27 @@ export async function boot(slug, opts = {}) {
       default: input = createBitmaskInput(canvas, W, H, getScale); break;
     }
   }
-  await runLiveGame(root, gameMod, seed, input, canvasState);
+  // --- Savepoint resume (docs/ADR-004) ---
+  // A live run that starts from a frame of the player's own earlier run. Fail LOUD rather than
+  // silently starting a fresh game: the player spent a savepoint (and possibly a credit) for this
+  // specific board, and dropping them onto an empty one would look like the feature simply lied.
+  let resume = null;
+  if (GameFilm.isResume()) {
+    showStatus(root, 'Loading savepoint…');
+    const sp = await GameFilm.fetchSavepoint();
+    if (!sp) {
+      showOverlay(root, 'Savepoint could not be loaded — your attempt was not spent.', GameFilm.getReturnUrl());
+      return;
+    }
+    // attemptsRemaining is what is left AFTER this launch, because the hub claims an attempt when it
+    // mints the token — an attempt is spent by launching, not by finishing.
+    resume = {
+      frames: sp.frames, frame: sp.frame, sensitivity: sp.sensitivity,
+      savepointId: GameFilm.getSavepointId(),
+      attemptsRemaining: Number.isFinite(sp.attemptsRemaining) ? sp.attemptsRemaining : 0,
+    };
+    root.querySelector('#gf-status')?.remove();
+  }
+
+  await runLiveGame(root, gameMod, seed, input, canvasState, resume);
 }

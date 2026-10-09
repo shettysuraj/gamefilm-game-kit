@@ -24,6 +24,10 @@ export const GameFilm = {
       this._token = params.get('token');
       this._replayToken = params.get('replay');
       this._replayHub = hub;
+      // Savepoint resume (docs/ADR-004) — an id, never the prefix itself. The frames come from the
+      // hub against the game token, so the URL can't be edited into "resume from someone else's run"
+      // or "resume at a frame I never reached".
+      this._savepointId = params.get('savepoint');
     }
 
     const seedParam = params.get('seed');
@@ -311,6 +315,31 @@ export const GameFilm = {
       return null;
     }
   },
+
+  isResume() {
+    return !!(this._savepointId && this._token && this._hubUrl);
+  },
+
+  getSavepointId() {
+    return this._savepointId || null;
+  },
+
+  // The prefix of the player's own earlier run, up to the savepoint frame. Fetched against the game
+  // token — the hub is what decides the frame, the sensitivity, and whose run it is.
+  async fetchSavepoint() {
+    try {
+      if (!this.isResume()) return null;
+      const res = await fetch(
+        `${this._hubUrl}/api/games/${this._gameType}/savepoints/${encodeURIComponent(this._savepointId)}?token=${this._token}`);
+      if (!res.ok) return null;
+      const d = await res.json();
+      if (!Array.isArray(d?.frames) || !Number.isFinite(d?.frame)) return null;
+      return d;
+    } catch (e) {
+      console.error('[GameFilm] fetchSavepoint failed:', e);
+      return null;
+    }
+  },
 };
 
 // --- Deterministic PRNG (Mulberry32) ---
@@ -340,27 +369,45 @@ export function createPRNG(seed) {
 // --- Input Recorder ---
 // Delta-compressed: only records frames where input changes.
 
-export function createRecorder() {
-  const frames = [];
-  let lastState = null;
-  let seqFrame = 0;
+// `opts` supports savepoint resume (docs/ADR-004): the recorder can be pre-seeded with the prefix of
+// an earlier run (`initialFrames`) and told to start counting at that run's frame N (`startFrame`),
+// so `getFrames()` yields ONE contiguous `prefix ++ continuation` stream. The server cannot tell it
+// from a run played straight through — `replay(seed, frames, opts)` is pure — which is why resume
+// needs no verification changes at all.
+export function createRecorder(opts = {}) {
+  const seedFrames = Array.isArray(opts.initialFrames)
+    ? opts.initialFrames.map(f => ({ f: f.f, s: f.s }))
+    : [];
+  const startFrame = Number.isFinite(opts.startFrame) ? opts.startFrame : 0;
+
+  const frames = seedFrames.slice();
+  let lastState = frames.length > 0 ? JSON.stringify(frames[frames.length - 1].s) : null;
+  let seqFrame = startFrame;
+  // The prefix is delta-compressed, so the input "in effect" at the splice frame is whatever the LAST
+  // prefix entry said — quite possibly a direction the player was holding then and is not holding now.
+  // Without an explicit entry at frame N the resumed sim would keep applying it until their first
+  // change. Force one entry on the first recorded frame so the continuation always starts from the
+  // player's actual input.
+  let forceNext = frames.length > 0;
 
   return {
     // Record a frame. `inputState` can be anything — a number (bitmask),
     // an array [x, y], an object — as long as it serializes consistently.
     record(inputState) {
       const s = JSON.stringify(inputState);
-      if (s !== lastState) {
+      if (forceNext || s !== lastState) {
         frames.push({ f: seqFrame, s: inputState });
         lastState = s;
+        forceNext = false;
       }
       seqFrame++;
     },
 
     // For bitmask-style inputs (simpler, more compact)
     recordBitmask(bitmask) {
-      if (frames.length === 0 || frames[frames.length - 1].s !== bitmask) {
+      if (forceNext || frames.length === 0 || frames[frames.length - 1].s !== bitmask) {
         frames.push({ f: seqFrame, s: bitmask });
+        forceNext = false;
       }
       seqFrame++;
     },
@@ -374,27 +421,38 @@ export function createRecorder() {
       const last = frames.length > 0 ? frames[frames.length - 1] : null;
       const prevTx = last?.s.tapX ?? -1;
       const prevTy = last?.s.tapY ?? -1;
-      if (!last || last.s.dx !== rdx || last.s.dy !== rdy || last.s.b !== buttons ||
+      if (forceNext || !last || last.s.dx !== rdx || last.s.dy !== rdy || last.s.b !== buttons ||
           prevTx !== rtx || prevTy !== rty) {
         const s = { dx: rdx, dy: rdy, b: buttons };
         if (rtx >= 0 || rty >= 0) { s.tapX = rtx; s.tapY = rty; }
         frames.push({ f: seqFrame, s });
+        forceNext = false;
       }
       seqFrame++;
     },
 
     getFrames() { return frames; },
     getFrameCount() { return seqFrame; },
-    reset() { frames.length = 0; lastState = null; seqFrame = 0; },
+    reset() {
+      frames.length = 0;
+      for (const f of seedFrames) frames.push({ f: f.f, s: f.s });
+      lastState = frames.length > 0 ? JSON.stringify(frames[frames.length - 1].s) : null;
+      seqFrame = startFrame;
+      forceNext = frames.length > 0;
+    },
   };
 }
 
 // --- Timeline (analytics snapshots) ---
 // Periodically captures game state for AI analysis.
 
-export function createTimeline(interval = 30, fps = 60) {
+// `startFrame` (docs/ADR-004): a savepoint-resumed run submits `prefix ++ continuation` as one frame
+// stream, so its timeline has to be numbered in that same stream — starting at 0 would put the
+// analytics on a different clock from the replay they describe, and `elapsedMs` would report only the
+// continuation for a run the engine scores in full.
+export function createTimeline(interval = 30, fps = 60, startFrame = 0) {
   const entries = [];
-  let frameCount = 0;
+  let frameCount = startFrame;
 
   // Elapsed milliseconds, DERIVED FROM THE FRAME COUNT — never from a clock. The loop is a fixed
   // timestep, so frames are the only monotonic quantity that is identical on the player's device and
@@ -419,7 +477,7 @@ export function createTimeline(interval = 30, fps = 60) {
       entries.push({ f: frameCount, t: ms(), ...snapshot });
     },
     getEntries() { return entries; },
-    reset() { entries.length = 0; frameCount = 0; },
+    reset() { entries.length = 0; frameCount = startFrame; },
   };
 }
 
