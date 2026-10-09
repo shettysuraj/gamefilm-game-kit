@@ -28,7 +28,67 @@ Ask: *what is the single verb?* Dodge. Stack. Aim. Time. Build the whole game ou
 
 ---
 
-## 1. Universal principles
+## 1. The weekly seed: design a new game every week
+
+Every published game is played on a **hub seed that rotates every 7 days**. Everyone plays the same
+seed that week, every score is verified by replaying `(seed, inputs)`, and the leaderboard is
+scoped to *(build + seed)*, so each week is a fresh board (spec: *Leaderboard scope*). That makes
+the seed your biggest design lever, not just a source of variety. **Use it so that each week's seed
+gives effectively a new game with the same skills.** A returning player should open your game on
+Monday and find a new challenge to learn and master. They shouldn't get last week's layout shuffled,
+and they shouldn't get a game so different that their practice is worthless.
+
+**POP is the reference implementation.** Study how it splits the seed into two layers:
+
+**Layer 1: the week's identity, rolled once at game start.** Before anything spawns,
+`generateTournamentMods(rng)` (`games/pop/game/state.js`) draws one frozen set of rules from the seed:
+
+| What the seed sets | Range | Effect |
+|---|---|---|
+| enemy speed / HP / fire rate / bullet speed | ×0.55–1.45 / ×0.6–1.4 / ×0.5–1.5 / ×0.65–1.35 | the week's tempo and pressure |
+| enemy movement frequency / amplitude | ×0.4–1.6 / ×0.5–1.5 | how erratic the field feels |
+| shield chance, shield-up and vulnerable durations | 15–40%, 2–4 s, 1–3 s | how much timing matters |
+| wave order: which enemy type fills which slot, per level | one of 6 permutations × 5 levels (7,776 combinations) | the week's route through the game |
+| mix / cameo chance: off-type and cross-level enemies mixed in | 30–80% / 10–30% | how much surprise |
+| boss shot pattern | derived from the mods | the bosses' week |
+
+Then it **names the week** from the most extreme modifier: BLITZ or CRAWL, IRON TIDE or GLASS CANNON,
+FIRESTORM or LULL, BULLET STORM or SLOW BURN, CHAOS or STEADY, TEMPEST or TIGHT (GAUNTLET when nothing
+dominates). The name is computed from the seed on the title screen *before* play and shown in the
+HUD, so players know "this is a BLITZ week" and adjust their strategy. A name turns random numbers
+into a theme people talk about. The mods are also logged as an analytics event, so the corpus can
+compare play across weeks.
+
+**Layer 2: moment-to-moment variance, scaled by level.** Spawn positions, phases, cooldown jitter
+and variant/cameo spawns all draw from the same seeded stream. In POP that variance is multiplied
+by a per-level `rngMul` (`SPAWN_TUNING` in `waves.js`): **0.15 on level 1, rising to 1.0 by level 4**.
+Early levels are close to fixed, so they're learnable, fair onboarding. Late levels are where the
+seed really bites.
+
+**What the seed must NOT touch:** in POP the wave *structure* stays fixed (how many waves, how many
+enemies per wave, when the bosses come), and so do the scoring rules (streak multiplier, tempo bonus
+against par times) and the upgrade system. In the code's own words: *"shifts positions, timings, and
+phases each week while keeping wave structure/composition fixed."* That fixed spine is what makes skill
+carry over from week to week and keeps scores meaningful.
+
+**Rules of thumb:**
+- **Bound every seeded rule to a range around a sane centre** (POP keeps every multiplier roughly
+  centred on ×1.0). No seed may produce an unwinnable or trivial week. **Sweep many seeds when you
+  test**, not just one. The Studio's 🎲 and `verify` (N seeds) are there for exactly this.
+- **Roll the week's rules once, up front, from the seed, in a fixed order.** Don't let them drift
+  during play. Changing the draw order or the ranges changes every future week, so it's an
+  `ENGINE_VERSION` bump.
+- **Make the week legible.** Name or describe the week's twist where the player sees it before
+  pressing start.
+- **Keep cosmetic randomness on a separate stream.** POP's starfield uses its own fixed-seed PRNG
+  (`stars.js`), so visuals can change without shifting the simulation.
+- **Ask of your design:** *if I only changed the seed, would a skilled player notice and need to
+  adapt, and would their skill still carry over?* If they wouldn't notice, the seed is under-used.
+  If their skill wouldn't carry over, it's over-used.
+
+---
+
+## 2. Universal principles
 
 **Difficulty is a curve, not a wall.** Start easy enough that the first 10 seconds are winnable, then
 ramp. The ramp should come from the *systems already on screen* — more enemies, faster fall, tighter
@@ -65,7 +125,7 @@ platform; the whole point is running the same seed until you master it.
 
 ---
 
-## 2. Structure — levels, mechanics, bosses
+## 3. Structure — levels, mechanics, bosses
 
 **Teach, then test.** Introduce one mechanic at a time in a safe context, then combine. Don't open
 with everything. Amphibian starts with slow cars before adding rivers and snakes. A new enemy should
@@ -93,7 +153,7 @@ player is trying to protect.
 
 ---
 
-## 3. Designing *within* the constraints (they're features)
+## 4. Designing *within* the constraints (they're features)
 
 - **Portrait, one-handed, touch-first (390×844).** Controls must be reachable with one thumb. The
   platform's joystick is a floating thumb-stick; the paddle tracks horizontal drag. Design vertical —
@@ -101,16 +161,14 @@ player is trying to protect.
 - **Procedural vector graphics — embrace the aesthetic.** No sprite sheets. This is a *style*, not a
   limitation: clean shapes, gradients, glow, bold silhouettes (think *Geometry Wars*, vector arcade).
   It reads great on phones and it's instant to iterate. Lean into neon-on-dark, crisp geometry.
-- **Seeded randomness is a design tool.** `createPRNG(seed)` gives you variety that's *fair and
-  reproducible* — the same challenge for everyone on the weekly seed, masterable through practice.
-  Use it to place hazards, pick patterns, vary spawns. Never use `Math.random`/`Date.now` in the sim
+- **Seeded randomness is a design tool**: see §1. Never use `Math.random`/`Date.now` in the sim
   (it breaks determinism *and* fairness). Wall-clock is banned; count frames.
 - **60fps on a mid-phone.** Keep per-frame allocations and draw calls modest. Pool objects, cap
   particle counts. A game that stutters feels broken regardless of design.
 
 ---
 
-## 4. Genre playbook
+## 5. Genre playbook
 
 Each is doable under the contract. For each: the core verb, the pacing spine, the platform game to
 crib from, and the determinism gotcha.
@@ -150,7 +208,7 @@ than continuous float simulation.
 
 ---
 
-## 5. Use what the platform gives you
+## 6. Use what the platform gives you
 
 You inherit a lot — don't rebuild it, and *do* use it, because a game that ignores it feels bare:
 
@@ -179,7 +237,7 @@ You inherit a lot — don't rebuild it, and *do* use it, because a game that ign
 
 ---
 
-## 6. Common mistakes (the verifier won't catch these — a playtest will)
+## 7. Common mistakes (the verifier won't catch these — a playtest will)
 
 - **No juice.** Correct but lifeless. Add feedback to *every* action before anything else.
 - **Difficulty wall, not curve.** Fun for 20 seconds then instantly unfair. Ramp gradually.
