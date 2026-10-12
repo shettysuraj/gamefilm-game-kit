@@ -65,6 +65,17 @@ by a per-level `rngMul` (`SPAWN_TUNING` in `waves.js`): **0.15 on level 1, risin
 Early levels are close to fixed, so they're learnable, fair onboarding. Late levels are where the
 seed really bites.
 
+**Layer 3: one named rule per week (POP v29+).** On top of the numbers, the seed picks ONE rule
+from a fixed list of 14 (`games/pop/game/rules.js`) — IRONCLAD, FRAGILE, CHOSEN PATH, NO BOMBS,
+ARSENAL, STREAK FEVER, TIME TRIAL, CLEAN SWEEP, HEADHUNTER, BULWARK, METEOR SHOWER, DRIFT,
+PENETRATION, GLASS CANNON. Each changes a *decision* (what to buy, chase, risk or target), not just a
+dial; players feel "×1.2 enemy speed" as slightly harder, but "your shots pierce shields for 25%"
+as a different game. The rule is drawn on its **own PRNG stream** (seed XOR a fixed salt), so adding
+it shifted no spawn; it is named and explained on the title screen before PLAY; and "hard" rules cap
+the week's numeric pressure so a hard rule never lands on a harsh week. If your game has distinct
+systems (an economy, a risk mechanic, a scoring rule), a small rule list is the cheapest way to make
+every week feel new.
+
 **What the seed must NOT touch:** in POP the wave *structure* stays fixed (how many waves, how many
 enemies per wave, when the bosses come), and so do the scoring rules (streak multiplier, tempo bonus
 against par times) and the upgrade system. In the code's own words: *"shifts positions, timings, and
