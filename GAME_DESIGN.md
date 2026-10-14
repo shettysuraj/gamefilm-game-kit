@@ -223,8 +223,10 @@ than continuous float simulation.
 
 You inherit a lot — don't rebuild it, and *do* use it, because a game that ignores it feels bare:
 
-- **Standard HUD** (`GAME_META.hud: true`): the platform draws the score + pause/music/sound buttons.
-  Don't hand-draw a score if you use this. (See spec §5.)
+- **Starter HUD** (spec §5, *The starter HUD*): paste `drawHud()` in as your default — level top-left,
+  score top-centre, lives top-right, progress bar underneath — reading the standard `getState()`
+  fields. Then make it yours: restyle it, add readouts, move it, or delete it. The pause/music/sound
+  buttons are always the platform's. (`hud: true` is legacy; don't use it in a new game.)
 - **Standard title / How-to-Play** (`GAME_META.howTo`): give it a few short lines and the platform
   draws a consistent title screen over your `TITLE` phase — game name, START, and a How-to-Play
   overlay — so every game teaches itself the same way. You keep owning the start (the tap that

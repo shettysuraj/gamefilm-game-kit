@@ -189,7 +189,6 @@ export const GAME_META = {
     { key: 'level', label: 'Level', compact: 'L' },
     { key: 'maxCombo', label: 'Best Combo' },
   ],
-  hud: true,                            // OPTIONAL — platform also draws the score (buttons are always standard)
   music: 'arcade',                      // OPTIONAL — BGM preset (see below)
   howTo: [                              // OPTIONAL — declare it → standard title + How-to-Play screen
     'Drag to move your paddle.',
@@ -204,26 +203,97 @@ export const GAME_META = {
   (`#6a6af0`) at game-over — drawn by the runtime, no game code, identical across all games.
   **Never draw your own version of any of these.** The game-over RETURN button in particular is
   automatic: a game that paints its own ends up with two, in slightly different places. If your game
-  has a bespoke control scheme it must handle, opt out with `hud: { controls: false }`.
+  has a bespoke control scheme it must handle, opt out with `hud: { controls: false, score: false, timer: false }`.
 - **Every game has a millisecond clock, running whether you score on it or not.** The platform
   derives it from the frame count (`frames × 1000/60`), never from a wall clock — `Date.now()` /
   `performance.now()` would break Law 1 and make every replay diverge, which is why the scan flags
   them. It is stamped as `t` (ms) on every replay snapshot alongside `f` (frame), so your game's
-  history carries a real duration even if your game never mentions time. **Don't hand-roll a
-  timer**: read `hud` below to display the platform's, and take the elapsed value from the replay
-  data rather than counting your own.
-- **`hud`** *(optional)* — governs the **scoreboard** and the **timer readout** (the controls above
-  are already standard). `hud: true` draws both; `{ timer: false }` or `{ score: false }` turns one
-  off; omit `hud` entirely and you draw your own. **Don't draw a readout the platform is already
-  drawing** — you get two.
-  `hud: true` draws the score (read from `getState().score`) top-center. Omitted or `false` → you
-  draw your own score (the default). `{ controls: false }` opts OUT of the standard control bar.
-  **When you use `hud: true`, don't also draw the score yourself** — it would double.
+  history carries a real duration even if your game never mentions time. **Never read a wall
+  clock**: if you show a timer, derive it from your frame count (`frames / 60` seconds) exactly as the
+  platform does, and take the elapsed value from the replay data rather than a clock of your own.
+- **Draw your own HUD — start from the starter HUD below.** Score, level, lives and progress are
+  part of your game's look, so they live in your code, where you can restyle or delete them. The
+  platform does not draw a scoreboard for new games.
+- **`hud`** *(optional, mostly legacy)* — **omit it in a new game.** Omitted means the platform draws
+  no score and no timer, and the standard control bar stays on. It exists for two cases:
+  - **Opting out of the control bar** for a game with its own scheme. Write all three keys:
+    `hud: { controls: false, score: false, timer: false }`. A `hud` object turns on the platform's
+    score and timer for every key you leave out, so `hud: { controls: false }` alone also draws both.
+  - **Legacy scoreboard:** `hud: true` makes the platform draw a plain score (and timer) at the top
+    centre. Published games (Garuda, Numbers, Stillpoint) depend on it, so it stays — but don't use
+    it in a new game. It covers only the score, so everything else ends up in a second style, and a
+    game that also draws its score shows two.
 - **`music`** *(optional)* — background music is note-data, not an audio file, so it's swappable by
   name: `'ambient'` (default), `'arcade'`, `'chiptune'`, `'tense'`, or `'none'` for silence. For a
   custom tune supply an object: `{ melody: [{ note: 440, dur: 0.5 }, …], chords: [[…]], wave }`
   (`note` in Hz, `0` = rest; `wave` is `'triangle' | 'square' | 'sawtooth' | 'sine'`). Omitted =
   `'ambient'`, so existing games are unchanged.
+
+### The starter HUD — the default, yours to change
+
+Every game should show its state at a glance. Paste this into your `game.js` as the starting point,
+then edit it, restyle it, add your own readouts (Sparx adds boosts), or delete it. It is ordinary
+game code: it ships frozen with each version, and nothing in the platform depends on how it looks.
+
+It reads the **standard state fields** (§7.3) from your own `getState()`, so wiring it up is one
+line in `render`. The layout is the house convention: **level top-left, score top-centre, lives
+top-right, progress bar underneath**. It stays clear of the two zones the platform owns: the
+**UNRANKED** badge in the top-left 20px, and the control bar in the bottom ~60px.
+
+```js
+// Starter HUD — the default layout. Edit, restyle, extend or delete it; it's your game.
+// Reads the standard fields from getState(): score, level, lives, maxLives, progress, target.
+function drawHud(ctx, W, s) {
+  const pad = 15;
+  ctx.save();
+  ctx.textBaseline = 'alphabetic';
+  const label = (text, x, align) => {
+    ctx.textAlign = align; ctx.font = '600 9px "Orbitron", sans-serif';
+    ctx.fillStyle = '#8b8fa8'; ctx.fillText(text, x, 18);
+  };
+  // top-left: level
+  if (s.level != null) {
+    ctx.textAlign = 'left'; ctx.font = '900 15px "Orbitron", sans-serif';
+    ctx.fillStyle = '#e8eaf0'; ctx.fillText(`LEVEL ${s.level}`, pad, 44);
+  }
+  // top-centre: score
+  label('SCORE', W / 2, 'center');
+  ctx.font = '900 24px "Orbitron", sans-serif'; ctx.fillStyle = '#ffffff';
+  ctx.fillText(Math.floor(s.score || 0).toLocaleString('en-US'), W / 2, 46);
+  // top-right: lives, spent ones greyed
+  if (s.lives != null) {
+    label('LIVES', W - pad, 'right');
+    const max = s.maxLives != null ? s.maxLives : s.lives;
+    for (let i = 0; i < max; i++) {
+      const x = W - pad - 7 - i * 18, y = 38;
+      ctx.fillStyle = i < s.lives ? '#79f4ff' : '#2a2d3a';
+      ctx.beginPath();
+      ctx.moveTo(x, y - 7); ctx.lineTo(x + 7, y); ctx.lineTo(x, y + 7); ctx.lineTo(x - 7, y);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+  // underneath: progress toward this level's goal, with the target marked
+  if (s.progress != null) {
+    const bx = pad, by = 68, bw = Math.round(W * 0.5), bh = 10;
+    const p = Math.max(0, Math.min(100, s.progress));
+    ctx.fillStyle = '#1c1f2a'; ctx.fillRect(bx, by, bw, bh);
+    ctx.fillStyle = s.target != null && p >= s.target ? '#7CFC9B' : '#79f4ff';
+    ctx.fillRect(bx, by, bw * p / 100, bh);
+    if (s.target != null) { ctx.fillStyle = '#ffffff'; ctx.fillRect(bx + bw * s.target / 100 - 1, by - 3, 2, bh + 6); }
+    ctx.textAlign = 'left'; ctx.font = '700 12px "Orbitron", sans-serif'; ctx.fillStyle = '#c4c8d4';
+    ctx.fillText(`${Math.floor(p)}%` + (s.target != null ? ` / ${s.target}%` : ''), bx + bw + 8, by + 10);
+  }
+  ctx.restore();
+}
+
+// in render(), after drawing the playfield (never on the TITLE phase):
+drawHud(ctx, W, this.getState());
+```
+
+Leave the top ~90px of the canvas for it, or move it — a landscape game, or one whose board needs
+the top edge, should put it wherever reads best. The fields are the standard; the drawing is a
+default.
+
 ### Who draws what
 
 | | drawn by | notes |
@@ -244,7 +314,7 @@ export const GAME_META = {
   render(ctx, W, H) {
     drawBackground(ctx, W, H);
     if (phase === 'TITLE') { drawStars(ctx); drawTitleArt(ctx, W, H); return; }   // ← stop here
-    drawHud(ctx); drawBoard(ctx);
+    drawBoard(ctx); drawHud(ctx, W, this.getState());
   }
   ```
 
@@ -415,7 +485,15 @@ metadata (§7.4).
 - `phase` — `'PLAY'` for active frames; any other value (e.g. `'TITLE'`) marks a non-recorded
   pre-game frame. Only `PLAY` frames are recorded — **and the one TITLE→PLAY transition frame is
   skipped too**, so never advance sim state on it (see §7.4b — the #1 replay-integrity bug).
-- `score` — current score (used if `getState` is absent, falls back to `getResult().score`).
+- **Standard state fields.** Use these names when your game has the concept, so the starter HUD
+  and any platform feature can read them without knowing your game:
+  - `score` — current score (used if `getState` is absent, falls back to `getResult().score`).
+  - `level` — the current level, wave or stage, 1-based.
+  - `lives` — lives remaining; `maxLives` — the most you can hold (so spent lives can be shown).
+  - `progress` — 0–100, how far through the current level's goal; `target` — the `progress` value
+    that clears it, if it isn't 100.
+  All are optional except `score`. Report them; don't invent synonyms (`hp`, `stage`, `pct`) for
+  the same thing.
 - `sensitivity` — surfaced into the submit payload when present (§7.4).
 - `wantsReturn: true` — runtime navigates back to the hub.
 - For **central** audio only, monotonic counters trigger built-in SFX:
