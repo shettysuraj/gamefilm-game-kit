@@ -901,7 +901,9 @@ async function runLiveGame(root, gameMod, seed, input, canvasState, resume) {
     }
     if (paused) { setPaused(false); return true; }
     const L = controlLayout(W, H);
-    if (gy > L.y - L.hy && gy < L.y + L.hy) {
+    // A game that opts out of the bar (hud.controls === false) must get those taps itself — the bar
+    // is not drawn, so hit-testing it here would leave invisible pause/mute buttons over the game.
+    if (!(hud && hud.controls === false) && gy > L.y - L.hy && gy < L.y + L.hy) {
       if (gx > L.help - L.hx && gx < L.help + L.hx) { setPaused(!paused); return true; }
       if (gx > L.pause - L.hx && gx < L.pause + L.hx) { setPaused(!paused); return true; }
       if (gx > L.bgm - L.hx && gx < L.bgm + L.hx) { audio.toggleBGM(); return true; }

@@ -219,6 +219,8 @@ export const GAME_META = {
   - **Opting out of the control bar** for a game with its own scheme. Write all three keys:
     `hud: { controls: false, score: false, timer: false }`. A `hud` object turns on the platform's
     score and timer for every key you leave out, so `hud: { controls: false }` alone also draws both.
+    Opting out removes the bar completely — it is neither drawn nor tap-tested, so every tap in that
+    strip reaches your game. Keyboard P / Esc (pause) and M (music) still work on desktop.
   - **Legacy scoreboard:** `hud: true` makes the platform draw a plain score (and timer) at the top
     centre. Published games (Garuda, Numbers, Stillpoint) depend on it, so it stays — but don't use
     it in a new game. It covers only the score, so everything else ends up in a second style, and a
