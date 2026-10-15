@@ -31,11 +31,11 @@ Ask: *what is the single verb?* Dodge. Stack. Aim. Time. Build the whole game ou
 ## 1. The weekly seed: design a new game every week
 
 Every published game is played on a **hub seed that rotates every 7 days**. Everyone plays the same
-seed that week, every score is verified by replaying `(seed, inputs)`, and the leaderboard is
-scoped to *(build + seed)*, so each week is a fresh board (spec: *Leaderboard scope*). That makes
+seed that week, every score is verified by replaying `(seed, inputs)`, and the weekly leaderboard
+belongs to that seed, so each week is a fresh board (spec: *Leaderboard scope*). That makes
 the seed your biggest design lever, not just a source of variety. **Use it so that each week's seed
 gives effectively a new game with the same skills.** A returning player should open your game on
-Monday and find a new challenge to learn and master. They shouldn't get last week's layout shuffled,
+Sunday (the seed changes at 00:00 UTC) and find a new challenge to learn and master. They shouldn't get last week's layout shuffled,
 and they shouldn't get a game so different that their practice is worthless.
 
 **POP is the reference implementation.** Study how it splits the seed into two layers:

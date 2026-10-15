@@ -24,8 +24,14 @@ loads on GameFilm.
                  │
         (iterate until you like it)
                  │
-   paste game.js into gamefilm.org   → done
+   publish it on gamefilm.org         → see below
 ```
+
+**Publishing** needs build access (invite-only while the platform is small). Once approved, follow
+**gamefilm.org/develop/guide**: connect Claude Code to GameFilm and it saves, opens for testing and
+submits your game for review directly. Or paste `game.js` into the Studio at gamefilm.org/develop.
+Approved games go live with a weekly leaderboard: every game's seed changes Sunday 00:00 UTC, so
+each week is a fresh competition (see `GAME_DESIGN.md` §1).
 
 ## Commands
 

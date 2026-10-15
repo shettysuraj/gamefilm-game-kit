@@ -36,7 +36,7 @@ responsibility fits in one file plus two small companions.
 | **Randomness** — `createPRNG(seed)` | **Headless server verification** (replays your `game.js`) + anticheat |
 | **End + result** — `isOver()`, `getResult()` | **Version archiving** — freezes the bytes of each `ENGINE_VERSION` you declare |
 | *(Optional)* custom input, per-game audio, richer snapshots/events | **Cross-version replay viewer** (old builds reproduced against their own engine) |
-| **Ship 3 files** — `game.js` + `favicon.svg` + `CHANGELOG.md` | **Leaderboards** (build + seed, weekly) |
+| **Ship 3 files** — `game.js` + `favicon.svg` + `CHANGELOG.md` | **Leaderboards** (one per weekly seed) |
 | **Obey the Four Laws** (§1) | **AI film sessions + corpus scouting reports** (driven by your `SCHEMA`) |
 | | Pause/mute UI, replay viewer, sandbox→publish review gates |
 
@@ -632,15 +632,16 @@ number, and a cosmetic change (a reformatted comment, a re-stamped version line)
 > the studio use system-assigned versioning described above and **do not declare a version at all** —
 > if you include one it's ignored and overwritten by the assigned number.
 
-**Leaderboard scope.** A leaderboard is scoped to **(build + seed)** — a player is ranked only
-against others who played the *same immutable build* on the *same seed*. Every ranking is
-therefore perfectly apples-to-apples: identical engine, identical challenge, only the player's
-decisions differ. Cross-build comparability is never a question because cross-build comparison
-never happens. The seed period is the competition window — **currently weekly**: the seed rotates
-every 7 days (`games.seed_period_ms` default 604800000) and the board is snapshotted each Sunday
-23:59 (`snapshot_leaderboard` cron). So a leaderboard is one build's scores on one week's seed. A
-player's progress *across* seeds and builds is the job of the AI corpus / scouting report, not the
-board.
+**Leaderboard scope.** The weekly leaderboard is scoped to the **seed**: it ranks every verified run
+of your game since the current seed began. The seed period is the competition window, **currently
+weekly**: every game's seed changes at **Sunday 00:00 UTC** (`games.seed_period_ms` default 604800000)
+and the finished week's board is snapshotted at Sunday 00:05 UTC (`snapshot_leaderboard` cron) and kept
+as a past week. Everyone on one week's board played the same seed. The board is **not** split by build:
+if a new version of your game is published mid-week, runs on the old and new build share that week's
+board, so ship balance changes that alter scoring early in a week or expect a mixed board until Sunday
+(POP promotes versions by hand right after a seed change for this reason). The all-time board spans
+every seed and build. A player's progress *across* seeds and builds is the job of the AI corpus /
+scouting report, not the board.
 
 ---
 

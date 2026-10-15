@@ -25,7 +25,7 @@ every time — do not hand back a game you haven't run through `verify`.
 2. **Validate:** run `node gf.mjs verify game.js`. It runs static + contract + **determinism** checks.
    If it **FAILS**, read the exact errors, fix `game.js`, and re-run. **Do not stop until `✓ ALL PASS`.**
 3. **Let them play:** run `node gf.mjs play game.js` (opens the browser).
-4. When the user is happy, they paste `game.js` into gamefilm.org. Done.
+4. When the user is happy, they publish it. That needs build access on gamefilm.org; once approved, the guide at gamefilm.org/develop/guide connects Claude Code to GameFilm (save, test link, submit for review), or they can paste `game.js` into the Studio at gamefilm.org/develop.
 
 ## Things the validator hard-blocks (write to these up front)
 
